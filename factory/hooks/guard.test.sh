@@ -9,8 +9,9 @@ failures=0
 
 # Code de sortie du hook pour une commande Bash, avec FACTORY_AGENT donné (1 par défaut).
 hook_rc() {
-  jq -n --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}}' \
-    | FACTORY_AGENT="${2:-1}" bash "$HOOK" >/dev/null 2>&1
+  # Here-string plutôt qu'un pipe : guard.sh peut sortir sans lire stdin (FACTORY_AGENT=0) ;
+  # jq échouerait alors en écrivant et pipefail garderait son code.
+  FACTORY_AGENT="${2:-1}" bash "$HOOK" <<<"$(jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}')" >/dev/null 2>&1
   echo $?
 }
 
@@ -65,6 +66,11 @@ expect_deny "gh api graphql -f query='mutation { deleteBranchProtectionRule(inpu
 expect_deny 'curl -s -X PUT -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/EnO33/vigie/pulls/12/merge'
 expect_deny 'curl -fsSL -H "Authorization: bearer $GH_TOKEN" -d @q.json https://api.github.com/graphql'
 expect_deny 'wget -qO- --header="Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/EnO33/vigie/rulesets'
+
+# Règles historiques, contournées avant par des espaces doubles
+expect_deny 'gh  pr merge 12 --squash'
+expect_deny 'gh pr  review 12  --approve'
+expect_deny 'gh  issue  edit 3 --add-label  board'
 
 # Témoins : ce qui doit rester permis
 expect_allow 'gh api repos/{owner}/{repo}/issues/12 --jq .id'

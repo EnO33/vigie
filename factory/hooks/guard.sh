@@ -43,9 +43,9 @@ case "$tool" in
     grep -qE 'push[^|;&]*(--force|-f( |$))' <<<"$cmd" && deny "pas de force-push"
     grep -qE -- '--no-verify' <<<"$cmd" && deny "pas de --no-verify"
     grep -qE 'core\.hooksPath' <<<"$cmd" && deny "les hooks Git du dépôt ne se désactivent pas"
-    grep -qE 'gh pr merge' <<<"$cmd" && deny "seul l'orchestrateur merge"
-    grep -qE 'gh pr review[^|;&]*--approve' <<<"$cmd" && deny "approbation via labels uniquement"
-    grep -qE 'gh (pr|issue) edit[^|;&]*--add-label[^|;&]*\bboard\b' <<<"$cmd" && deny "le label board est réservé au board"
+    grep -qE 'gh[[:space:]]+pr[[:space:]]+merge' <<<"$cmd" && deny "seul l'orchestrateur merge"
+    grep -qE 'gh[[:space:]]+pr[[:space:]]+review[^|;&]*--approve' <<<"$cmd" && deny "approbation via labels uniquement"
+    grep -qE 'gh[[:space:]]+(pr|issue)[[:space:]]+edit[^|;&]*--add-label[^|;&]*\bboard\b' <<<"$cmd" && deny "le label board est réservé au board"
     # Endpoints du board et de l'orchestrateur : merge, statut des gates, règles du dépôt.
     grep -qE 'gh[[:space:]]+api[^|;&]*/(merges?|statuses|rulesets|interaction-limits|branches/[^[:space:]]+/protection)([/?"'\''[:space:]]|$)' <<<"$cmd" \
       && deny "endpoint réservé au board et à l'orchestrateur (merge, statuts, règles du dépôt)"
