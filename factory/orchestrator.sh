@@ -96,7 +96,7 @@ merge_if_green() {
   local pr="$1" head title closes
   head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)"
   log "gates sur PR #$pr ($head)"
-  if (cd "$WORKDIR" && factory/gates.sh --pr "$pr") >"$LOG_DIR/gates-pr$pr.log" 2>&1; then
+  if (cd "$WORKDIR" && bash factory/gates.sh --pr "$pr") >"$LOG_DIR/gates-pr$pr.log" 2>&1; then
     # Squash au nom du board, message maîtrisé (pas de Co-authored-by généré par GitHub),
     # et uniquement si la tête de PR est celle que les gates ont validée.
     title="$(gh pr view "$pr" --repo "$REPO" --json title --jq .title)"
