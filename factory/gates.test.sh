@@ -15,9 +15,19 @@ failures=0
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
-# cargo factice : note l'étape, échoue si c'est FAIL_STEP.
+# cargo factice : note l'étape, échoue si c'est FAIL_STEP. À l'étape test, échoue aussi si
+# REQUIRE_FILE manque, ou si tous les fichiers de BREAK_IF_ALL sont présents ensemble.
 echo "$1" >>"$GATES_TEST_DIR/calls"
 [ "$1" = "${FAIL_STEP:-}" ] && { echo "cargo factice : échec de $1" >&2; exit 1; }
+if [ "$1" = test ]; then
+  if [ -n "${REQUIRE_FILE:-}" ] && [ ! -f "$REQUIRE_FILE" ]; then
+    echo "cargo factice : $REQUIRE_FILE absent" >&2; exit 1
+  fi
+  if [ -n "${BREAK_IF_ALL:-}" ]; then
+    all=1; for f in $BREAK_IF_ALL; do [ -f "$f" ] || all=0; done
+    [ "$all" = 0 ] || { echo "cargo factice : combinaison cassée" >&2; exit 1; }
+  fi
+fi
 exit 0
 EOF
 cat >"$TMP/bin/gh" <<'EOF'
@@ -27,7 +37,10 @@ case "$1 $2" in
   "pr view") printf 'docs: test\nCorps de la PR de test.\n' ;;
   api\ *)
     for arg in "$@"; do
-      case "$arg" in state=*) echo "${arg#state=}" >>"$GATES_TEST_DIR/statuses" ;; esac
+      case "$arg" in
+        */statuses/*) echo "${arg##*/}" >>"$GATES_TEST_DIR/status-shas" ;;
+        state=*) echo "${arg#state=}" >>"$GATES_TEST_DIR/statuses" ;;
+      esac
     done ;;
 esac
 exit 0
@@ -46,9 +59,41 @@ git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@exam
   commit -q -am "chore: gates complaisants"
 git -C "$TMP/wd" push -q origin HEAD:refs/pull/8/head
 
+# PR en retard sur main, toutes parties d'une base B plus ancienne. main avance ensuite :
+# C restaure un test de l'outillage absent de B, D modifie la 1re ligne du README, E ajoute
+# marqueur-main. Aucune PR ne touche un fichier protégé.
+g() { git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid "$@"; }
+g checkout -q -B base origin/main
+g rm -q factory/orchestrator-notify.test.sh
+g commit -q -m "chore: base sans le test ntfy"
+B="$(git -C "$TMP/wd" rev-parse HEAD)"
+# PR 9 : en retard, sans conflit.
+g checkout -q -B pr9 "$B"
+g commit -q --allow-empty -m "docs: PR partie de l'ancienne base"
+g push -q origin pr9:refs/pull/9/head
+# PR 11 : modifie la même ligne du README que D (conflit).
+g checkout -q -B pr11 "$B"
+sed -i '1s/.*/# Vigie (PR)/' "$TMP/wd/README.md"
+g commit -q -am "docs: titre du README côté PR"
+g push -q origin pr11:refs/pull/11/head
+# PR 12 : ajoute marqueur-pr, qui ne casse qu'avec marqueur-main (E).
+g checkout -q -B pr12 "$B"
+echo pr >"$TMP/wd/marqueur-pr"; g add marqueur-pr
+g commit -q -m "feat: marqueur côté PR"
+g push -q origin pr12:refs/pull/12/head
+# main : C, D, E.
+g checkout -q base
+g checkout -q origin/main -- factory/orchestrator-notify.test.sh
+g commit -q -m "chore: main reçoit le test ntfy"
+sed -i '1s/.*/# Vigie (main)/' "$TMP/wd/README.md"
+g commit -q -am "docs: titre du README côté main"
+echo main >"$TMP/wd/marqueur-main"; g add marqueur-main
+g commit -q -m "feat: marqueur côté main"
+g push -q origin base:refs/heads/main
+
 # Lance « gates.sh --pr <N> » (7 par défaut) ; FAIL_STEP vide = aucun échec.
 run_pr() {
-  : >"$TMP/calls"; : >"$TMP/statuses"
+  : >"$TMP/calls"; : >"$TMP/statuses"; : >"$TMP/status-shas"
   (cd "$TMP/wd" && PATH="$TMP/bin:$PATH" GATES_TEST_DIR="$TMP" FAIL_STEP="$1" \
     bash "$GATES" --pr "${2:-7}" >"$TMP/out" 2>&1)
 }
@@ -76,6 +121,30 @@ for step in fmt clippy test xtask deny llvm-cov; do
     echo "FAIL étape cargo $step rouge : « $next » a tourné après l'échec"; failures=$((failures + 1))
   fi
 done
+
+# PR en retard sans conflit : tests de l'outillage pris sur main, gates jugés sur la fusion
+# (le cargo factice exige marqueur-main, qui n'existe que sur main).
+export REQUIRE_FILE=marqueur-main
+run_pr "" 9
+check "PR en retard sans conflit : gates sur la fusion avec main" success
+unset REQUIRE_FILE
+head9="$(git -C "$TMP/wd" rev-parse refs/heads/pr9)"
+if [ "$(sort -u "$TMP/status-shas")" = "$head9" ]; then echo "ok   status publié sur la tête de la PR, pas sur la fusion"
+else echo "FAIL status publié sur « $(sort -u "$TMP/status-shas" | paste -sd' ' -) », attendu $head9"; failures=$((failures + 1)); fi
+
+# PR en conflit avec main : failure, message explicite, aucune étape cargo.
+run_pr "" 11
+check "PR en conflit avec main" failure
+if grep -q "branche en conflit avec main : à mettre à jour" "$TMP/out"; then echo "ok   PR en conflit : message explicite"
+else echo "FAIL PR en conflit : message absent"; failures=$((failures + 1)); fi
+if [ -s "$TMP/calls" ]; then echo "FAIL PR en conflit : cargo a tourné"; failures=$((failures + 1))
+else echo "ok   PR en conflit : aucune étape cargo"; fi
+
+# PR en retard qui ne casse qu'une fois fusionnée avec main.
+export BREAK_IF_ALL="marqueur-main marqueur-pr"
+run_pr "" 12
+check "PR en retard qui casse une fois fusionnée" failure
+unset BREAK_IF_ALL
 
 # Les contrôles viennent du gates.sh de confiance, pas de la copie de la PR.
 run_pr "" 8

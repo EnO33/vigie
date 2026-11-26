@@ -12,6 +12,9 @@ ROOT="$(git rev-parse --show-toplevel)"
 # Chemin absolu de ce script, résolu avant tout cd : en mode --pr, le processus enfant doit être
 # ce gates.sh (celui de main), jamais la copie du worktree de la PR.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Outillage de confiance (le dossier factory/ de ce script) : ses tests ne dépendent pas de la
+# PR, dont le worktree peut précéder un ajout à factory/ sur main.
+FACTORY_DIR="$(dirname "$SELF")"
 BASE_REF="${BASE_REF:-origin/main}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
 PROTECTED_RE='^(VISION\.md|CLAUDE\.md|docs/(factory|engineering)/|clippy\.toml|deny\.toml|rustfmt\.toml|rust-toolchain\.toml|\.claude/|\.zed/|\.githooks/|\.github/|docker/|docker-compose\.yml|factory/|xtask/|\.cargo/)'
@@ -62,12 +65,29 @@ run_mutants_on_diff() {
   fi
 }
 
+# Mode --pr : fusionne la base dans le worktree de la PR pour juger ce que le merge produirait.
+# Fusion locale, jamais poussée ; identité passée en -c, sans hook ni signature, aucune config
+# modifiée. Conflit : échec avec un message explicite.
+merge_base() {
+  step "fusion avec $BASE_REF"
+  if ! git -c user.name="factory gates" -c user.email=gates@localhost.invalid \
+      -c core.hooksPath=/dev/null -c commit.gpgsign=false \
+      merge --no-edit "$BASE_REF" >/dev/null 2>&1; then
+    git merge --abort >/dev/null 2>&1 || true
+    echo "branche en conflit avec main : à mettre à jour"
+    return 1
+  fi
+  echo "fusion locale avec $BASE_REF : $(git rev-parse --short HEAD) (jamais poussée)"
+}
+
 run_gates() {
-  step "modes";         bash factory/check-modes.test.sh
-                        bash factory/check-modes.sh
-  step "hooks";         bash factory/hooks/guard.test.sh
-                        bash factory/orchestrator.test.sh
-                        bash factory/orchestrator-notify.test.sh
+  # Tests de l'outillage : depuis FACTORY_DIR. check-modes.sh, lui, vérifie l'index du répertoire
+  # courant (le worktree de la PR en mode --pr).
+  step "modes";         bash "$FACTORY_DIR/check-modes.test.sh"
+                        bash "$FACTORY_DIR/check-modes.sh"
+  step "hooks";         bash "$FACTORY_DIR/hooks/guard.test.sh"
+                        bash "$FACTORY_DIR/orchestrator.test.sh"
+                        bash "$FACTORY_DIR/orchestrator-notify.test.sh"
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
@@ -97,8 +117,10 @@ case "${1:-}" in
   --checks)
     # Processus enfant lancé par --pr : ici, set -e s'applique à chaque étape. Dans la condition
     # d'un if, bash ignore set -e (même dans un sous-shell) : une étape rouge passerait inaperçue.
+    # Intégrité et attribution sur la tête de la PR ; gates sur sa fusion avec la base.
     check_integrity
     check_attribution "${GATES_PR_TEXT:-}"
+    merge_base
     run_gates
     ;;
   --pr)
@@ -106,6 +128,7 @@ case "${1:-}" in
     cd "$ROOT"
     wt="$(mktemp -d)/pr-$pr"
     git fetch --quiet origin "pull/$pr/head:gates/pr-$pr" --force
+    git fetch --quiet origin "${BASE_REF#origin/}"  # base à jour pour la fusion de --checks
     git worktree add --quiet --force "$wt" "gates/pr-$pr"
     trap 'git -C "$ROOT" worktree remove --force "$wt"' EXIT
     cd "$wt"
