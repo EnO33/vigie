@@ -4,7 +4,7 @@ Faits vérifiés, datés, sourcés. Plus récent en haut.
 
 ## 2026-11-26 — spike moteur : toolkits d'interface (chrome webview ou UI native Rust)
 
-Sources : `R` = `/usr/local/cargo/registry/src/index.crates.io-*/`. Versions et dates : `cargo info`
+Sources : `R` = `/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`. Versions et dates : `cargo info`
 et API `crates.io/api/v1/crates/<crate>/versions` (date `created_at`, champ `yanked`). Seuil des 7 jours :
 publiée au plus tard le 2026-11-19. Rien n'a été compilé ni exécuté : tout est lu.
 Référence wry : **0.57.3** (2026-11-18, 8 jours), comme demandé. `cargo info wry` donne aujourd'hui
@@ -19,18 +19,19 @@ Choix des trois candidats : egui/eframe, iced, Slint. Non examinés : gtk4 (MIT,
 
 Contrainte wry (`R/wry-0.57.3/src/lib.rs` l. 1573) : `build_as_child<W: HasWindowHandle>(self, window: &'a W)`,
 `raw-window-handle` **0.6** avec `std` (`Cargo.toml` l. 149-151). Sous Linux (doc l. 1558-1566) : X11
-uniquement, pas Wayland ; `gtk::init` à appeler et `gtk::main_iteration_do` à faire tourner avec la boucle
+uniquement (voir l'entrée plus bas, l. 268-286, pour la panique hors X11) ; `gtk::init` et `gtk::main_iteration_do` avec la boucle
 d'événements ; pas de redimensionnement automatique, appeler `WebView::set_bounds` (l. 1539, doc de `build`). Alternative Wayland+X11 citée par la doc : `build_gtk` avec `gtk::Fixed`.
-Le `W` est implicitement `Sized` : un `&dyn HasWindowHandle` ne passe pas tel quel.
+Le `W` est implicitement `Sized`, mais `impl<H: HasWindowHandle + ?Sized> HasWindowHandle for &H`
+(`R/raw-window-handle-0.6.2/src/borrowed.rs` l. 166) : `build_as_child(&w)` avec `w: &dyn Window` donne
+`W = &dyn Window`, qui est `Sized`. Aucun adaptateur n'est nécessaire (lu, pas compilé).
 
-| | eframe 0.37.0 | iced 0.14.0 | Slint 1.19.1 |
+| | eframe 0.37.0 | iced 0.14.0 | Slint 1.19.0 (1.19.1 non éligible) |
 |---|---|---|---|
-| Publiée | 2026-10-15 (41 j) | 2025-12-07 (354 j) | 2026-11-24 (2 j) ; 1.19.0 : 2026-11-16 (10 j) |
-| Licence | MIT OR Apache-2.0 : admise | MIT : admise | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` : **éliminé (licence)** |
-| MSRV (crate de tête) | 1.95 | 1.88 | 1.95 |
-| Dernière release | 2026-10-15 | 2025-12-07 | 2026-11-24 |
-| `raw-window-handle` | 0.6.2, `eframe-0.37.0/Cargo.toml` l. 169-170 | 0.6, `iced_runtime-0.14.0/Cargo.toml` l. 57-58 | 0.6 derrière la feature `raw-window-handle-06`, absente de `default` (`slint-1.19.1/Cargo.toml.orig` l. 95-97) |
-| `HasWindowHandle` | **implémenté directement** : `impl HasWindowHandle for Frame` (`eframe-0.37.0/src/epi.rs` l. 750) et pour `CreationContext` (l. 101) | pas sur un type de l'application : `window::run(id, f: impl FnOnce(&dyn Window) -> T + Send + 'static)` (`iced_runtime-0.14.0/src/window.rs` l. 463-466), `trait Window: HasWindowHandle + HasDisplayHandle` (l. 196) | `slint::WindowHandle: HasWindowHandle` (`i-slint-core-1.19.1/api.rs` l. 412-419) |
+| Publiée | 2026-10-15 (42 j) | 2025-12-07 (354 j) | 1.19.0 : 2026-11-16 (10 j) ; 1.19.1 : 2026-11-24 (2 j), non éligible |
+| Licence | MIT OR Apache-2.0 : admise | MIT : admise | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` (champ `license` crates.io de 1.19.0, identique en 1.19.1) : **éliminé (licence)** |
+| MSRV (crate de tête) | 1.95 | 1.88 | relevé sur 1.19.1 (1.95), non relu sur 1.19.0 : non vérifié |
+| `raw-window-handle` | 0.6.2, `eframe-0.37.0/Cargo.toml` l. 169-170 | 0.6, `iced_runtime-0.14.0/Cargo.toml` l. 57-58 | 0.6 derrière la feature `raw-window-handle-06`, absente de `default` (`slint-1.19.1/Cargo.toml.orig` l. 95-97 ; 1.19.0 non lue) |
+| `HasWindowHandle` | **implémenté directement** : `impl HasWindowHandle for Frame` (`eframe-0.37.0/src/epi.rs` l. 750) et pour `CreationContext` (l. 101) | pas sur un type de l'application : `window::run(id, f: impl FnOnce(&dyn Window) -> T + Send + 'static)` (`iced_runtime-0.14.0/src/window.rs` l. 463-466), `trait Window: HasWindowHandle + HasDisplayHandle` (l. 196) | `slint::WindowHandle: HasWindowHandle` (`i-slint-core-1.19.1/api.rs` l. 412-419 ; 1.19.0 non lue) |
 | X11 | feature `x11` l. 113-119 de `eframe-0.37.0/Cargo.toml`, dans `default` (`cargo info`) | `x11` et `wayland` dans `default` (`cargo info`) | non examiné (éliminé) |
 | GTK initialisé | **non vérifié** (aucun code d'eframe ne touche GTK) | idem | non examiné |
 | Exemple public avec vue web enfant | aucun : `emilk/egui/examples` (API GitHub) n'en contient pas : « non vérifié » | aucun dans `iced-rs/iced/examples` : « non vérifié » | aucun dans `slint-ui/slint/examples` : « non vérifié » |
@@ -44,10 +45,10 @@ Faits liés :
 - iced : `window::run` exige `Send + 'static` et renvoie le résultat par `Task<T>` avec `T: Send`. Un
   `wry::WebView` enveloppe des objets GTK ; je n'ai pas prouvé par compilation qu'il est `!Send`
   (aucun `unsafe impl Send` pour `WebView` dans `lib.rs`, seul `RequestAsyncResponder` l. 446 en a un). Si c'est
-  le cas, il faut le construire dans la closure et le ranger dans un `thread_local`, et passer par un newtype
-  pour le `&dyn Window` (`Sized`). Non vérifié, mais c'est un frottement que eframe n'a pas.
-- Wayland : `build_as_child` n'y fonctionne pas (doc l. 1558-1559). Les trois toolkits activent Wayland par défaut
-  (eframe l. 93-98 ; iced `default`) : forcer X11 au lancement (ex. désactiver la feature `wayland`)
+  le cas, il faut le construire dans la closure et le ranger dans un `thread_local`. Non vérifié, mais c'est
+  un frottement que eframe n'a pas (`Frame` est utilisable directement, sans passer par une closure `Send`).
+- Wayland : `build_as_child` n'y fonctionne pas (doc l. 1558-1559). eframe et iced activent Wayland par défaut
+  (eframe : `default` l. 61-72 de `Cargo.toml`, qui contient `wayland` ; iced : `default`) ; Slint non examiné : forcer X11 au lancement (ex. désactiver la feature `wayland`)
   n'a **pas** été vérifié.
 
 ### Option (A) — chrome en webview : isolation interface / page
@@ -73,15 +74,24 @@ API wry 0.57.3 (`src/lib.rs`) :
   de partage d'origine attendu ; non testé).
 - Même limite Linux que (B) : `build_as_child` X11 seulement (doc l. 1558-1559), ou `build_gtk` + `gtk::Fixed`.
   CEF : non examiné dans ce spike.
+- Condition d'isolation : `with_custom_protocol` s'enregistre sur le **`WebContext`**, pas sur la vue
+  (`R/wry-0.57.3/src/webkitgtk/mod.rs` l. 381 `web_context.register_uri_scheme` ; `webkitgtk/web_context.rs`
+  l. 130-144 `register_uri_scheme_as_secure`). Sans `new_with_web_context`, chaque vue reçoit un contexte neuf
+  (`mod.rs` l. 263-268). **La vue d'interface doit avoir son propre `WebContext`, jamais partagé avec les
+  pages**, sinon une page peut demander le schéma de l'interface (atteignabilité réelle : non vérifiée).
+  L'absence de pont est prouvée par `mod.rs` l. 351-352 : `window.ipc` n'est injecté que si `ipc_enabled`.
+- Vue enfant CEF pour (B) : eframe, iced, Slint : **non examiné** (aucune lecture de `cef` pour ce critère).
 
 ### Recommandation
 
 Prototyper **(B) avec eframe 0.37.0**. Raisons vérifiées : seul candidat à la fois éligible (licence admise,
-MSRV 1.95 ≤ 1.100, release de 41 jours, la plus récente des deux éligibles) et dont `Frame` implémente
+MSRV 1.95 ≤ 1.100, release de 42 jours, la plus récente des deux éligibles) et dont `Frame` implémente
 `HasWindowHandle` (`epi.rs` l. 750) : `build_as_child(&frame)` passe sans adaptateur. iced est éligible mais
-sans release depuis 354 jours et sans type portant le handle (closure `Send`). Slint est éliminé (licence).
+sans release du crate `iced` depuis 354 jours (`iced_winit` 0.14.1 : 2026-09-13) et sans type portant le handle (closure `Send`). Slint est éliminé (licence).
 Le prototype doit trancher les points non vérifiés : X11 forcé sous une session Wayland, `gtk::init` +
-`main_iteration_do` depuis la boucle eframe, `set_bounds` à chaque redimensionnement, entrée clavier entre
+`main_iteration_do` depuis la boucle eframe (essayer aussi `eframe::create_native`, `eframe-0.37.0/src/lib.rs`
+l. 376, avec sa propre boucle winit comme l'exemple wry ; sinon `main_iteration_do` dans `ui()` n'est pas appelé
+quand la fenêtre est au repos : non vérifié), `set_bounds` à chaque redimensionnement, entrée clavier entre
 vue web enfant et egui. S'il échoue, repli : (A), dont l'isolation est décrite ci-dessus.
 
 ## 2026-11-26 — spike moteur : réglages réseau et modèle de processus (wry 0.57.3, cef 156.7.0)
