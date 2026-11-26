@@ -22,8 +22,8 @@ re-vérifier avec `pkg-config`.
   (`R/wry-0.57.3/src/lib.rs` : trait `WebViewExtUnix` l. 2414, `fn webview` l. 2430, impl l. 2447). Tout réglage ci-dessous passe donc par là,
   après `build_gtk`/`build_as_child`. `WebViewBuilder` n'expose aucun de ces réglages.
   Mais le build charge déjà la page : `src/webkitgtk/mod.rs` l. 385-389 (`web_context.load_uri(…)` si
-  `attributes.url`, sinon `load_html`). Des réglages posés après le build laissent donc la première page
-  aux défauts WebKit. Piste : construire sans `with_url`/`with_html`, poser les réglages via
+  `attributes.url`, sinon `load_html`). Des réglages posés après le build peuvent laisser la première page
+  aux défauts WebKit (`load_uri` peut être asynchrone : non vérifié ; non mesuré). Piste : construire sans `with_url`/`with_html`, poser les réglages via
   `webview()`, puis `load_url`. Ordre effectif : **non mesuré.**
 - Ce que wry fait déjà (`src/webkitgtk/mod.rs`) : contexte éphémère si `with_incognito(true)`
   (l. 259-260, `WebContext::new_ephemeral()`), proxy via `WebsiteDataManager` (l. 271-282),
@@ -51,7 +51,7 @@ re-vérifier avec `pkg-config`.
     `#[cfg_attr(feature = "v2_32", deprecated = "Since 2.32")]`, `webkit2gtk-2.0.2/src/auto/web_context.rs`
     l. 685, `fn set_tls_errors_policy` l. 688) ; `WebsiteDataManagerExt::set_tls_errors_policy`
     (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616) ; elles règlent seulement le traitement des
-    certificats invalides, aucun trafic n'est coupé. Appeler la version `WebContextExt` fait échouer le
+    certificats invalides ; qu'aucun trafic ne soit coupé est déduit des noms, sans doc (`enums.rs` l. 3616-3622) : **non vérifié.** Appeler la version `WebContextExt` fait échouer le
     build : le workspace a `deprecated = "deny"` (`Cargo.toml` l. 27).
   - `WebsiteDataManager` (`website_data_manager.rs`) : `is_ephemeral` l. 566 est un **getter** en lecture
     seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Pour régler : `WebsiteDataManager::new_ephemeral()`
@@ -129,7 +129,8 @@ re-vérifier avec `pkg-config`.
 - WebKitGTK : sans `with_ipc_handler`, wry n'enregistre ni le message handler `ipc` ni `window.ipc`
   (`src/webkitgtk/mod.rs` l. 314-316, 351-352, 757 ; `ipc_enabled` conditionne l. 351). WebView2 :
   idem, `window.ipc` n'est posé que dans `attach_ipc_handler` (`src/webview2/mod.rs` l. 516-517, 984-993).
-  Pas de pont wry sans handler. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
+  Pas de pont wry sans `with_ipc_handler` ; un custom protocol enregistré (`register_uri_scheme`,
+  `src/webkitgtk/mod.rs` l. 381) reste un canal page→hôte via `fetch`. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
   sans handler : **non vérifié.** `grep -rn IsWebMessageEnabled R/wry-0.57.3/src` : aucun résultat,
   wry ne coupe donc pas ce canal côté runtime.
 - `with_initialization_script` (`lib.rs` l. 1011) : WebKitGTK crée `UserScript::new(…, &[], &[])` à
@@ -152,8 +153,19 @@ re-vérifier avec `pkg-config`.
 Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 - Titre : `with_document_title_changed_handler(impl Fn(String))` l. 1426.
 - Chargement : `with_on_page_load_handler(impl Fn(PageLoadEvent, String))` l. 1448.
-- Navigation autorisée : `with_navigation_handler(impl Fn(String) -> bool)` l. 1309 (`false` bloque).
-- Nouvelle fenêtre : `with_new_window_req_handler` l. 1407. Proxy : `with_proxy_config` l. 1460.
+- Navigation autorisée : `with_navigation_handler(impl Fn(String) -> bool)` l. 1309. Portée exacte, WebKitGTK : vue principale, décision seulement pour
+  `PolicyDecisionType::NavigationAction` (`src/webkitgtk/mod.rs` l. 563-566, sinon `return false`) ; sans URI
+  dans la requête, `false` sans décision (l. 589) : défaut WebKit. WebView2 : branché sur `add_NavigationStarting`
+  seul (`src/webview2/mod.rs` l. 781) ; `grep FrameNavigationStarting src/webview2/mod.rs` : 0, la navigation
+  des iframes n'est jamais vue par le handler.
+- Nouvelle fenêtre : `with_new_window_req_handler` l. 1407. Réserve `NewWindowResponse::Allow`, Linux
+  (`src/webkitgtk/mod.rs` l. 518-552) : wry crée lui-même une vue liée avec `WebViewAttributes { ..Default::default() }`
+  (l. 537-546) : ni handler de navigation, ni script d'init, ni incognito, ni proxy (touche « rien sur
+  disque » et Q5) ; 3 `unwrap` : `toplevel()` l. 520, `downcast::<gtk::ApplicationWindow>()` l. 521,
+  `application()` l. 523, panique si la vue n'est pas dans une `gtk::ApplicationWindow` liée à une
+  application. Windows : `Allow` → `SetHandled(false)` (`src/webview2/mod.rs` l. 874), popup ouverte par le
+  runtime hors wry ; effet exact **non vérifié** (doc Microsoft non lue). `PageEngine` : jamais `Allow`
+  (`Create` ou `Deny`). Proxy : `with_proxy_config` l. 1460.
 - Vues multiples : `build_as_child` l. 1573 ; Linux **X11 uniquement**, Wayland via
   `WebViewBuilderExtUnix::build_gtk` (l. 2041, 2061) avec `gtk::Fixed` ; `gtk::init` requis, boucle GTK à
   avancer avec `gtk::main_iteration_do` ; **panique** si `gtk::init` n'a pas été appelé **dans le même
@@ -167,10 +179,11 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
   `gdk_display.downcast_ref::<X11Display>().unwrap()` quand le display GDK par défaut n'est pas X11.
   Réserve : wry demande `gtk = "0.18"` (`wry-0.57.3/Cargo.toml` l. 204-205), gtk-0.18.2 demande
   `gdk = "0.18"` (l. 74-75) ; gdk-0.18.2 est la seule version du registre, aucun Cargo.lock du dépôt ne
-  résout wry : version effective **non vérifiée.** Panique pour handle invalide hors Linux : **non vérifié.** `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
+  résout wry : version effective **non vérifiée.** Panique pour handle invalide hors Linux : **non vérifié.** En marche, aussi sous Linux : `with_on_page_load_handler` → `webview.uri().unwrap()`
+  (`src/webkitgtk/mod.rs` l. 491 et 494) ; IPC → `.expect("WebView does not have UserContentManager")` (l. 735). `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
 - Conséquence : le futur `PageEngine` doit vérifier que le display GDK est X11 et que `gtk::init` a été
   appelé sur ce thread avant `build_as_child` ; valider le handle ne suffit pas (la panique ne se rattrape
-  pas côté Rust strict).
+  pas côté Rust strict : `catch_unwind` interdit, `clippy.toml` l. 18 ; `panic = "abort"` en release, `Cargo.toml` l. 85).
 - CEF : titre `on_title_change` (`cef` l. 17770), URL `on_address_change` (l. 17762), chargement
   `on_load_start` (l. 21584) / `on_load_end` (l. 21592), navigation `on_before_browse` (l. 26940).
   Vues multiples côté CEF : **non vérifié.**
@@ -179,7 +192,7 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
 préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
-panique pour handle invalide hors Linux ; doc C de `set_preference` ; héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
+panique pour handle invalide hors Linux ; doc C de `set_preference` ; portée du handler de navigation (iframes WebView2, requête sans URI WebKitGTK) et effet de `Allow` sous Windows ; sens de `Ignore`/`Fail` (TLS) ; `load_uri` asynchrone ; héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
 
