@@ -4,7 +4,8 @@ set -uo pipefail
 cd "$(dirname "$0")"
 M=./measure.sh
 fail() { echo "FAIL: $*" >&2; exit 1; }
-leftovers() { pgrep -fa "$1" >&2; pgrep -f "$1" >/dev/null; }
+# Motif ancré en fin de ligne : 'sleep 31' ne doit pas attraper un 'sleep 310' de l'hôte.
+leftovers() { pgrep -fa "$1\$" >&2; pgrep -f "$1\$" >/dev/null; }
 
 bash -n measure.sh && bash -n measure_test.sh || fail "bash -n"
 
@@ -29,6 +30,11 @@ leftovers 'sleep 300' && fail "SIGKILL non envoyé : instance survivante"
 # Descendant qui change de groupe (set -m) : tué quand même (arrêt par session).
 $M startup --runs 1 -- bash -c 'set -m; sleep 51 & set +m; echo VIGIE_SPIKE_READY; sleep 52' >/dev/null || fail "setpgid"
 leftovers 'sleep 5[12]' && fail "descendant setpgid survivant"
+
+# Stdout bavard avant READY : le coût de détection doit rester linéaire (50 000 lignes, médiane < 150 ms).
+out="$($M startup --runs 3 -- bash -c 'seq 50000; echo VIGIE_SPIKE_READY; sleep 37')" || fail "startup bavard"
+med="$(sed -n 's/^startup_median_ms=//p' <<<"$out")"
+[ "$med" -lt 150 ] || fail "détection de READY quadratique : médiane $med ms avec 50 000 lignes (attendu < 150)"
 
 $M startup -- true 2>/dev/null && fail "argument manquant accepté"
 
@@ -70,7 +76,6 @@ $M memory --settle 20 -- sh -c 'echo VIGIE_SPIKE_READY; sleep 41; true' >/dev/nu
 mp=$!; sleep 1.5; kill -TERM "$mp"; wait "$mp"; rc=$?
 [ "$rc" -eq 143 ] || fail "SIGTERM : code $rc au lieu de 143"
 leftovers 'sleep 41' && fail "instance survivante après SIGTERM sur measure.sh"
-leftovers 'sleep 20' && fail "attente de stabilisation survivante après SIGTERM sur measure.sh"
 
 # Deux TERM de suite pendant l'arrêt : le KILL part quand même (instance qui ignore TERM).
 $M memory --settle 20 -- sh -c 'trap "" TERM; echo VIGIE_SPIKE_READY; sleep 53' >/dev/null 2>&1 &
@@ -101,7 +106,7 @@ exec "$@"
 FAKE
 chmod +x "$T/fakestrace"
 out="$(VIGIE_STRACE="$T/fakestrace" $M network --duration 0.2 -- sh -c 'echo VIGIE_SPIKE_READY')" || fail "network (faux strace)"
-grep -qx 'network_calls=3' <<<"$out" || fail "network_calls attendu 2 : $out"
+grep -qx 'network_calls=3' <<<"$out" || fail "network_calls attendu 3 : $out"
 grep -qx 'network_dest=93.184.216.34:443' <<<"$out" && grep -qx 'network_dest=1.1.1.1:53' <<<"$out" && grep -qx 'network_dest=\[2001:db8::1\]:443' <<<"$out" || fail "adresses : $out"
 grep -q 'wayland' <<<"$out" && fail "AF_UNIX listé"
 

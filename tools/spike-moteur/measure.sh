@@ -18,11 +18,7 @@ now() { local t="${EPOCHREALTIME//[.,]/}"; NOW_MS=$(( t / 1000 )); }
 alive() { local st; { read -r; read -r; read -r _ st; } 2>/dev/null <"/proc/$1/status" && [[ $st != Z* ]]; }
 
 # has_ready <fichier> : une ligne est exactement VIGIE_SPIKE_READY.
-has_ready() {
-  local line
-  while IFS= read -r line || [ -n "$line" ]; do [ "$line" = VIGIE_SPIKE_READY ] && return 0; done 2>/dev/null <"$1"
-  return 1
-}
+has_ready() { grep -qxF VIGIE_SPIKE_READY "$1" 2>/dev/null; }
 
 # median <entier…> : médiane ; moyenne (entière) des deux valeurs du milieu si N est pair.
 median() {
@@ -51,6 +47,7 @@ stop() {
   for ((i = 0; i < 20; i++)); do [ -z "$(session_pids)" ] && break; nap 0.1; done
   pids="$(session_pids)"
   [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
+  kill -KILL "$PID" 2>/dev/null || true # signal arrivé avant le setsid() du fils : session encore vide
   wait "$PID" 2>/dev/null || true
   PID=""
 }
@@ -71,7 +68,7 @@ nap() { read -r -t "$1" -u 9 || true; }
 spawn() {
   local out="$1"; shift
   : >"$out" # vide avant le lancement : sinon le READY du tour précédent est relu
-  setsid "$@" >"$out" &
+  setsid "$@" >"$out" 9>&- & # 9>&- : l'instance n'hérite pas du fifo de nap
   PID=$!
 }
 
@@ -89,7 +86,7 @@ wait_ready() {
 }
 
 # Somme des RSS (ko) de la session de l'instance, lue dans /proc/<pid>/stat (champ 6 = session,
-# champ 24 = RSS en pages). Un fichier qui disparaît pendant la lecture est ignoré.
+# champ 24 = RSS en pages ; = VmRSS : get_mm_rss() = anon + file + shmem, noyau 6.6). Un fichier qui disparaît pendant la lecture est ignoré.
 tree_rss_kb() {
   { cat /proc/[0-9]*/stat 2>/dev/null || true; } |
     awk -v sid="$PID" -v page="$(getconf PAGESIZE)" '
