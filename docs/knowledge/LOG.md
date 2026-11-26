@@ -57,9 +57,14 @@ re-vérifier avec `pkg-config`.
     certificats invalides ; qu'aucun trafic ne soit coupé est déduit des noms, sans doc (`enums.rs` l. 3616-3622) : **non vérifié.** Appeler la version `WebContextExt` fait échouer le
     build : le workspace a `deprecated = "deny"` (`Cargo.toml` l. 27).
   - `WebsiteDataManager` (`website_data_manager.rs`) : `is_ephemeral` l. 566 est un **getter** en lecture
-    seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Pour régler : `WebsiteDataManager::new_ephemeral()`
-    (l. 43) ou la propriété du builder `is_ephemeral(self, bool)` (l. 157) ; côté wry, `WebContext::new_ephemeral()`
-    (`src/webkitgtk/web_context.rs` l. 54). Aussi `set_itp_enabled` (l. 577), `set_network_proxy_settings` (l. 589).
+    seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Côté `webkit2gtk` : `WebsiteDataManager::new_ephemeral()`
+    (l. 43), builder `is_ephemeral(self, bool)` (l. 157), `set_itp_enabled` (l. 577), `set_network_proxy_settings`
+    (l. 589). **Hors de portée de wry 0.57.3 sans fork** : aucune API wry n'accepte un `WebsiteDataManager` ni un
+    `webkit2gtk::WebContext` ; `WebContext::new_ephemeral` est `pub(crate)` (`R/wry-0.57.3/src/web_context.rs` l. 54, champ `os`
+    `pub(crate)` l. 29) et `WebContextImpl::new_ephemeral` (`src/webkitgtk/web_context.rs` l. 54) est dans
+    `pub(crate) mod webkitgtk` (`lib.rs` l. 371) : inatteignable. Seul point d'entrée public :
+    `with_incognito(true)` (`lib.rs` l. 1442), qui appelle `new_ephemeral` en interne (`src/webkitgtk/mod.rs`
+    l. 259-260). `with_related_view` perd cet incognito (voir plus haut).
 - Prefetch de ressources (`<link rel=prefetch>`) : aucun réglage trouvé. **Non vérifié.**
 - Vérification de certificats en ligne (OCSP/CRL) et rapports/télémétrie : aucun réglage trouvé dans la
   source lue ; le comportement vient de libsoup/GnuTLS, hors des crates lus. **Non vérifié.**
@@ -91,7 +96,7 @@ re-vérifier avec `pkg-config`.
   `process_type` est `NULL` pour le processus navigateur ; les valeurs de `CefSettings` équivalentes à un
   switch sont posées avant l'appel ; `command_line_args_disabled` démarre avec une ligne vide.
   Modifier les processus enfants peut provoquer « undefined behavior including crashes ».
-- Autre point : `ImplBrowserProcessHandler::on_before_child_process_launch` (l. 29342).
+- Autre point : `ImplBrowserProcessHandler::on_before_child_process_launch` (`cef` bindings, l. 29342).
 - `Settings` (`cef::Settings`, `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 556-589 ;
   équivalent C `_cef_settings_t`, `cef-dll-sys-…/x86_64_unknown_linux_gnu.rs` l. 17791) : `no_sandbox`, `cache_path`, `root_cache_path`,
   `persist_session_cookies`, `command_line_args_disabled`, `accept_language_list`, `disable_signal_handlers`.
@@ -113,15 +118,18 @@ re-vérifier avec `pkg-config`.
   (recherche de `disable-component-update`, `disable-background-networking`, `no-pings`,
   `disable-domain-reliability`, `disable-field-trial`… : aucune occurrence), et les sources Chromium
   de la version 156 n'ont pas pu être lues (`raw.githubusercontent.com` : HTTP 429 ;
-  `chromium.googlesource.com` : 404). À établir dans une story dédiée, avec la source Chromium de 156.0.31.
+  `chromium.googlesource.com` : 404). À établir dans une story dédiée, avec la source Chromium 156.0.8078.100 (`cef-dll-sys` bindings l. 39 : `CEF_VERSION =
+  "156.0.31+ge603d97+chromium-156.0.8078.100"` ; 156.0.31 est la version de CEF, pas de Chromium).
 
 ### Q4 — Modèle de processus
 - CEF : le crash du rendu est signalé au processus navigateur par
   `ImplRequestHandler::on_render_process_terminated(browser, status: TerminationStatus, error_code,
   error_string)` (`cef` l. 27024 ; doc C `cef-dll-sys` l. 28920 : « Called on the browser process UI
-  thread when the render process terminates unexpectedly »). Le callback tourne dans le processus hôte,
-  ce qui montre qu'il existe un processus séparé ; que l'hôte survive à un crash reste **non mesuré**.
-  Aussi `on_render_process_unresponsive` (l. 27014, 15 s sans événement d'entrée, doc C).
+  thread when the render process terminates unexpectedly »). Processus de rendu séparé par défaut : **non vérifié** ;
+  le mode mono-processus existe (doc C de `_cef_request_context_t`, cef-dll-sys l. 24586 : « When running in
+  single-process mode there is only a single render process (the main process) »). Que l'hôte survive à un
+  crash reste **non mesuré**. Aussi `on_render_process_unresponsive` (`cef` l. 27014 ; doc C cef-dll-sys
+  l. 28908 : 15 s sans événement d'entrée).
 - WebKitGTK : `WebViewExt::connect_web_process_terminated` (`webkit2gtk-2.0.2/src/auto/web_view.rs`
   l. 2853) ; wry 0.57.3 ne le connecte pas (`grep web_process_terminated src/` : aucun résultat),
   il faut passer par `WebViewExtUnix::webview()`. Survie de l'hôte : **non mesuré**.
@@ -168,9 +176,9 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
   (`src/webkitgtk/mod.rs` l. 518-552) : wry crée lui-même une vue liée avec `WebViewAttributes { ..Default::default() }`
   (l. 537-546) : attributs wry par défaut : ni handler de navigation, ni script d'init. Contexte (incognito, proxy)
   hérité de la vue liée côté WebKit, `builder.web_context(…)` n'étant pas appelé (l. 419-423) : **non vérifié**
-  (touche « rien sur disque » et Q5) ; 3 `unwrap` : `toplevel()` l. 520, `downcast::<gtk::ApplicationWindow>()` l. 521,
+  (touche « rien sur disque » et Q5) ; 5 `unwrap` : `toplevel()` l. 520, `downcast::<gtk::ApplicationWindow>()` l. 521,
   `application()` l. 523, panique si la vue n'est pas dans une `gtk::ApplicationWindow` liée à une
-  application ; `related_webviews.lock().unwrap()` l. 534 et 550 ; l'erreur de `new_gtk` est avalée par `.ok()` l. 553
+  application ; (et `related_webviews.lock().unwrap()` l. 534 et 550) ; l'erreur de `new_gtk` est avalée par `.ok()` l. 553
   après `window.show_all()` l. 537 : une fenêtre vide reste à l'écran. Windows : `Allow` → `SetHandled(false)` (`src/webview2/mod.rs` l. 874), popup ouverte par le
   runtime hors wry ; effet exact **non vérifié** (doc Microsoft non lue). `PageEngine` : jamais `Allow`
   (`Create` ou `Deny`). Proxy : `with_proxy_config` l. 1460 ; sous Windows, avec `with_additional_browser_args`, il est **ignoré sans erreur** :
@@ -180,7 +188,8 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
   avancer avec `gtk::main_iteration_do` ; **panique** si `gtk::init` n'a pas été appelé **dans le même
   thread** (doc de `build` l. 1541-1544, doc de `build_as_child` l. 1569-1572, doc de `build_gtk` l. 2040). La doc dit aussi « panique si le
   handle est invalide » (l. 1571), mais la source Linux est différente : `build_as_child` → `new_as_child`
-  (l. 1576) → `new_x11` (`src/webkitgtk/mod.rs` l. 132) : un handle non Xlib renvoie
+  (l. 1576) → `new_x11` (`src/webkitgtk/mod.rs` : appel l. 132, `fn new_x11` l. 144 ; sans la feature `x11`, l. 139 :
+  `Err(Error::UnsupportedWindowHandle)`) : un handle non Xlib renvoie
   `Err(Error::UnsupportedWindowHandle)` (l. 150-152), sans panique ; deux paniques
   sous Linux : l. 157 `gdk::Display::default()` appelle `assert_initialized_main_thread!()`
   (`R/gdk-0.18.2/src/auto/display.rs` l. 301 ; macro `gdk-0.18.2/src/rt.rs` l. 16-25 : « GDK may only be used
@@ -199,10 +208,18 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
   Vues multiples côté CEF : **non vérifié.**
 
 ### Non vérifié (récapitulatif)
-Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
-télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
-préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
-panique pour handle invalide hors Linux ; doc C de `set_preference` ; portée du handler de navigation (iframes WebView2, requête sans URI WebKitGTK) et effet de `Allow` sous Windows ; sens de `Ignore`/`Fail` (TLS) ; `load_uri` asynchrone ; héritage du contexte (incognito, proxy) par une vue `with_related_view` ; couverture des iframes par `NavigationStarting` (WebView2) et des sous-frames par `NavigationAction` (WebKitGTK) ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
+- Q1 : défauts des réglages WebKit ; OCSP/CRL et rapports ; `<link rel=prefetch>` ; sens de `Ignore`/`Fail` (TLS) ;
+  `load_uri` asynchrone ; ordre réglages/premier chargement ; héritage du contexte (incognito, proxy) par une vue
+  `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38).
+- Q2 : flags WebView2 de mise à jour/crash/télémétrie ; sémantique de `msSmartScreenProtection` ; URL et version des pages Microsoft.
+- Q3 : tous les switches Chromium de CEF ; noms de préférences/policies CEF ; doc C de `set_preference`.
+- Q4 : survie de l'hôte à un crash de rendu (3 moteurs) ; processus de rendu séparé par défaut côté CEF (le mode mono-processus existe).
+- Q5 : `window.chrome.webview` sans handler ; monde de `UserScript::new` et sémantique de `world_name` (`for_world`) ;
+  monde d'exécution des scripts WebView2 et CEF ; pont par défaut CEF.
+- Q6 : panique pour handle invalide hors Linux ; portée du handler de navigation (couverture des iframes par
+  `NavigationStarting` côté WebView2 et des sous-frames par `NavigationAction` côté WebKitGTK) ; défaut WebKit appliqué
+  à une requête sans URI (l'absence de décision est lue, l. 589) ; effet de `Allow` sous Windows ; vues multiples CEF.
+- `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
 
