@@ -65,6 +65,21 @@ run_mutants_on_diff() {
   fi
 }
 
+# Mode --pr : fusionne la base dans le worktree de la PR pour juger ce que le merge produirait.
+# Fusion locale, jamais poussée ; identité passée en -c, sans hook ni signature, aucune config
+# modifiée. Conflit : échec avec un message explicite.
+merge_base() {
+  step "fusion avec $BASE_REF"
+  if ! git -c user.name="factory gates" -c user.email=gates@localhost.invalid \
+      -c core.hooksPath=/dev/null -c commit.gpgsign=false \
+      merge --no-edit "$BASE_REF" >/dev/null 2>&1; then
+    git merge --abort >/dev/null 2>&1 || true
+    echo "branche en conflit avec main : à mettre à jour"
+    return 1
+  fi
+  echo "fusion locale avec $BASE_REF : $(git rev-parse --short HEAD) (jamais poussée)"
+}
+
 run_gates() {
   # Tests de l'outillage : depuis FACTORY_DIR. check-modes.sh, lui, vérifie l'index du répertoire
   # courant (le worktree de la PR en mode --pr).
@@ -102,8 +117,10 @@ case "${1:-}" in
   --checks)
     # Processus enfant lancé par --pr : ici, set -e s'applique à chaque étape. Dans la condition
     # d'un if, bash ignore set -e (même dans un sous-shell) : une étape rouge passerait inaperçue.
+    # Intégrité et attribution sur la tête de la PR ; gates sur sa fusion avec la base.
     check_integrity
     check_attribution "${GATES_PR_TEXT:-}"
+    merge_base
     run_gates
     ;;
   --pr)
@@ -111,6 +128,7 @@ case "${1:-}" in
     cd "$ROOT"
     wt="$(mktemp -d)/pr-$pr"
     git fetch --quiet origin "pull/$pr/head:gates/pr-$pr" --force
+    git fetch --quiet origin "${BASE_REF#origin/}"  # base à jour pour la fusion de --checks
     git worktree add --quiet --force "$wt" "gates/pr-$pr"
     trap 'git -C "$ROOT" worktree remove --force "$wt"' EXIT
     cd "$wt"
