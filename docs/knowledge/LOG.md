@@ -20,7 +20,7 @@ Choix des trois candidats : egui/eframe, iced, Slint. Non examinés : gtk4 (MIT,
 Contrainte wry (`R/wry-0.57.3/src/lib.rs` l. 1573) : `build_as_child<W: HasWindowHandle>(self, window: &'a W)`,
 `raw-window-handle` **0.6** avec `std` (`Cargo.toml` l. 149-151). Sous Linux (doc l. 1558-1566) : X11
 uniquement, pas Wayland ; `gtk::init` à appeler et `gtk::main_iteration_do` à faire tourner avec la boucle
-d'événements ; pas de redimensionnement automatique, appeler `WebView::set_bounds` (l. 1541). Alternative Wayland+X11 citée par la doc : `build_gtk` avec `gtk::Fixed`.
+d'événements ; pas de redimensionnement automatique, appeler `WebView::set_bounds` (l. 1539, doc de `build`). Alternative Wayland+X11 citée par la doc : `build_gtk` avec `gtk::Fixed`.
 Le `W` est implicitement `Sized` : un `&dyn HasWindowHandle` ne passe pas tel quel.
 
 | | eframe 0.37.0 | iced 0.14.0 | Slint 1.19.1 |
