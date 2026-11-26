@@ -34,10 +34,11 @@ re-vérifier avec `pkg-config`.
   doc `lib.rs` l. 1434 « WebContext will be ignored if incognito is enabled »).
   Piège : une vue `with_related_view` n'appelle pas `builder.web_context(…)` (l. 419-423). Le
   `with_incognito` et le `with_proxy_config` de cette vue sont posés sur un contexte qui n'est pas utilisé
-  (l. 259-282 puis l. 419-420) : ils sont perdus sans erreur. Ce dont la vue liée hérite vient de WebKitGTK,
+  (l. 259-282 puis l. 419-420) : ils sont perdus sans erreur (`register_uri_scheme`, l. 381, va aussi sur ce contexte inutilisé ; effet
+  côté WebKit **non vérifié**). Ce dont la vue liée hérite vient de WebKitGTK,
   doc non lue : **non vérifié.** Compte pour « rien sur disque » et pour `PageEngine`.
   Sans `with_web_context` ni `with_incognito`, wry prend `WebContext::default()` = `Self::new(None)`
-  (`R/wry-0.57.3/src/web_context.rs` l. 97-98) : aucun `WebsiteDataManager` n'est créé
+  (`R/wry-0.57.3/src/web_context.rs` l. 97-98) : wry ne fournit aucun `WebsiteDataManager`
   (`src/webkitgtk/web_context.rs` l. 32-50). Persistance par défaut de WebKit : **non vérifié.** **Aucun** réglage de
   préchargement DNS, d'audit de liens, de TLS ni de rapports n'est posé : les défauts WebKit s'appliquent.
 - Réglages réseau existants côté `webkit2gtk-2.0.2` :
@@ -49,7 +50,9 @@ re-vérifier avec `pkg-config`.
     (doc 2.42.5, `class.WebContext.html`, non vérifié pour 2.38 ; la source webkit2gtk porte aussi
     `#[cfg_attr(feature = "v2_32", deprecated = "Since 2.32")]`, `webkit2gtk-2.0.2/src/auto/web_context.rs`
     l. 685, `fn set_tls_errors_policy` l. 688) ; `WebsiteDataManagerExt::set_tls_errors_policy`
-    (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616).
+    (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616) ; elles règlent seulement le traitement des
+    certificats invalides, aucun trafic n'est coupé. Appeler la version `WebContextExt` fait échouer le
+    build : le workspace a `deprecated = "deny"` (`Cargo.toml` l. 27).
   - `WebsiteDataManager` (`website_data_manager.rs`) : `is_ephemeral` l. 566 est un **getter** en lecture
     seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Pour régler : `WebsiteDataManager::new_ephemeral()`
     (l. 43) ou la propriété du builder `is_ephemeral(self, bool)` (l. 157) ; côté wry, `WebContext::new_ephemeral()`
@@ -139,9 +142,10 @@ re-vérifier avec `pkg-config`.
   isolé : **non vérifié** (doc WebKitGTK non lue). WebView2 : `AddScriptToExecuteOnDocumentCreated` (`src/webview2/mod.rs` l. 1444) ;
   monde de la page selon la doc Microsoft : **non vérifié** (doc non lue). Sous Windows les scripts
   vont toujours dans les sous-frames (doc `lib.rs` l. 1004 et 1029).
-- CEF : pas de pont par défaut. Les scripts s'exécutent côté rendu, dans
-  `ImplRenderProcessHandler::on_context_created` (`cef` l. 32690 ; doc C l. 30458 : « immediately after
-  the V8 context for a frame has been created »). `src/wrapper/message_router.rs` fournit un routeur de
+- CEF : absence de pont par défaut **non vérifiée** (aucune source lue ne le prouve). Point d'injection
+  possible côté rendu : `ImplRenderProcessHandler::on_context_created` (`cef` l. 32690 ; doc C l. 30458 :
+  « immediately after the V8 context for a frame has been created ») ; `Frame::execute_java_script`
+  (`cef` l. 7599) existe aussi. Aucun script d'initialisation de CEF lu. `src/wrapper/message_router.rs` fournit un routeur de
   messages ; il n'est actif que si on l'installe. Monde isolé : **non vérifié.**
 
 ### Q6 — Capacités pour `PageEngine` (wry)
@@ -153,12 +157,17 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 - Vues multiples : `build_as_child` l. 1573 ; Linux **X11 uniquement**, Wayland via
   `WebViewBuilderExtUnix::build_gtk` (l. 2041, 2061) avec `gtk::Fixed` ; `gtk::init` requis, boucle GTK à
   avancer avec `gtk::main_iteration_do` ; **panique** si `gtk::init` n'a pas été appelé **dans le même
-  thread** (doc l. 1541-1544 et 1569-1572 ; l. 2039 pour `build_gtk`). La doc dit aussi « panique si le
+  thread** (doc de `build` l. 1541-1544, doc de `build_as_child` l. 1569-1572, doc de `build_gtk` l. 2040). La doc dit aussi « panique si le
   handle est invalide » (l. 1571), mais la source Linux est différente : `build_as_child` → `new_as_child`
   (l. 1576) → `new_x11` (`src/webkitgtk/mod.rs` l. 132) : un handle non Xlib renvoie
-  `Err(Error::UnsupportedWindowHandle)` (l. 150-152), sans panique ; la vraie panique est
-  `gdk_display.downcast_ref::<X11Display>().unwrap()` (l. 158) quand le display GDK par défaut n'est pas
-  X11. Panique pour handle invalide hors Linux : **non vérifié.** `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
+  `Err(Error::UnsupportedWindowHandle)` (l. 150-152), sans panique ; deux paniques
+  sous Linux : l. 157 `gdk::Display::default()` appelle `assert_initialized_main_thread!()`
+  (`R/gdk-0.18.2/src/auto/display.rs` l. 301 ; macro `gdk-0.18.2/src/rt.rs` l. 16-25 : « GDK may only be used
+  from the main thread » ou « GDK has not been initialized ») ; l. 158
+  `gdk_display.downcast_ref::<X11Display>().unwrap()` quand le display GDK par défaut n'est pas X11.
+  Réserve : wry demande `gtk = "0.18"` (`wry-0.57.3/Cargo.toml` l. 204-205), gtk-0.18.2 demande
+  `gdk = "0.18"` (l. 74-75) ; gdk-0.18.2 est la seule version du registre, aucun Cargo.lock du dépôt ne
+  résout wry : version effective **non vérifiée.** Panique pour handle invalide hors Linux : **non vérifié.** `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
 - Conséquence : le futur `PageEngine` doit vérifier que le display GDK est X11 et que `gtk::init` a été
   appelé sur ce thread avant `build_as_child` ; valider le handle ne suffit pas (la panique ne se rattrape
   pas côté Rust strict).
@@ -170,7 +179,7 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
 préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
-héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
+panique pour handle invalide hors Linux ; doc C de `set_preference` ; héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
 
