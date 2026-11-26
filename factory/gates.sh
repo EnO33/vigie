@@ -59,6 +59,7 @@ run_mutants_on_diff() {
 }
 
 run_gates() {
+  step "hooks";         bash factory/hooks/guard.test.sh
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
