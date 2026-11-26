@@ -51,7 +51,8 @@ Plugins (`factory/plugins.lock`, API releases GitHub)
 Sources : `R` = `$CARGO_HOME/registry/src/index.crates.io-1949cf8c6b5b557f/` (ici
 `/usr/local/cargo/registry/src/…`). Crates lus : `wry-0.57.3` (octets identiques au `.crate` téléchargé
 sur static.crates.io, `diff -rq` : seul `.cargo-ok` diffère), `webkit2gtk-2.0.2` (version imposée par
-`wry-0.57.3/Cargo.toml` l. 221, avec la feature `v2_40`, l. 53), `cef-156.7.0+156.0.31`,
+`wry-0.57.3/Cargo.toml` l. 221, avec la feature `v2_38`, l. 222 ; `v2_40` seulement avec la feature wry
+`linux-body`, l. 52-53, absente de `default`, l. 47-50), `cef-156.7.0+156.0.31`,
 `cef-dll-sys-156.7.0+156.0.31`. Rien n'a été exécuté : tout est lu, rien n'est « mesuré ».
 `tao 0.37.3` n'a pas été lu (aucune question ne l'exige).
 Les doc comments de `webkit2gtk-2.0.2` sont vides : la sémantique vient de la doc officielle
@@ -108,7 +109,8 @@ qui n'est pas forcément la version installée chez l'utilisateur : à re-vérif
   switch sont posées avant l'appel ; `command_line_args_disabled` démarre avec une ligne vide.
   Modifier les processus enfants peut provoquer « undefined behavior including crashes ».
 - Autre point : `ImplBrowserProcessHandler::on_before_child_process_launch` (l. 29342).
-- `Settings` (`cef_settings_t`, l. 558-586) : `no_sandbox`, `cache_path`, `root_cache_path`,
+- `Settings` (`cef::Settings`, `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 556-589 ;
+  équivalent C `_cef_settings_t`, `cef-dll-sys-…/x86_64_unknown_linux_gnu.rs` l. 17791) : `no_sandbox`, `cache_path`, `root_cache_path`,
   `persist_session_cookies`, `command_line_args_disabled`, `accept_language_list`, `disable_signal_handlers`.
   Un `cache_path` vide donne un profil en mémoire : **non vérifié** (doc non lue).
 - Noms de switches Chromium (mises à jour de composants, Safe Browsing, rapports de crash, domain
@@ -138,9 +140,12 @@ qui n'est pas forcément la version installée chez l'utilisateur : à re-vérif
   Pas de pont wry sans handler. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
   sans handler : **non vérifié.**
 - `with_initialization_script` (`lib.rs` l. 1011) : WebKitGTK crée `UserScript::new(…, &[], &[])` à
-  `UserScriptInjectionTime::Start` (`src/webkitgtk/mod.rs` l. 829-841) ; `webkit2gtk-2.0.2` n'offre pas
-  de variante « pour un monde » (`src/auto/user_script.rs` : seul `new`, l. 21) : monde de la page, pas
-  de monde isolé. WebView2 : `AddScriptToExecuteOnDocumentCreated` (`src/webview2/mod.rs` l. 1444) ;
+  `UserScriptInjectionTime::Start` (`src/webkitgtk/mod.rs` l. 829-841) ; `UserScript::new` injecte
+  donc dans le monde de la page. `webkit2gtk-2.0.2` offre pourtant `UserScript::for_world(…, world_name, …)`
+  (`src/auto/user_script.rs` l. 44, sous `v2_22`, active via `v2_38`) et `UserStyleSheet::for_world`
+  (`user_style_sheet.rs` l. 44). Accès possible : `WebViewExtUnix::webview()` (wry `lib.rs` l. 2430) puis
+  `user_content_manager()` (`webkit2gtk` `web_view.rs` l. 1227). Que `world_name` crée un vrai monde
+  isolé : **non vérifié** (doc WebKitGTK non lue). WebView2 : `AddScriptToExecuteOnDocumentCreated` (`src/webview2/mod.rs` l. 1444) ;
   monde de la page selon la doc Microsoft : **non vérifié** (doc non lue). Sous Windows les scripts
   vont toujours dans les sous-frames (doc `lib.rs` l. 1004 et 1029).
 - CEF : pas de pont par défaut. Les scripts s'exécutent côté rendu, dans
@@ -167,4 +172,4 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 ### Non vérifié (récapitulatif)
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
-monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
+sémantique de `world_name` (`for_world`, WebKitGTK) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
