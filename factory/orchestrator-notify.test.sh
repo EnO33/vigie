@@ -32,10 +32,36 @@ done
 printf '%s' "${FAKE_CURL_CODE:-200}"
 exit "${FAKE_CURL_RC:-0}"
 EOF
-# gh factice : réponses finales (le --jq du vrai gh est supposé appliqué).
+# gh factice : réponses finales (le --jq du vrai gh est supposé appliqué), sauf pour la liste
+# des PR avec labels : PR 7, labels tenus dans $FAKE/labels.7 et modifiés par « gh pr edit ».
 cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+arg_after() { local prev="" a; for a in "${@:2}"; do [ "$prev" = "$1" ] && printf '%s' "$a"; prev="$a"; done; }
 case "$*" in
+  *"pr list"*"--json number,labels"*)
+    data="$(jq -R . "$FAKE/labels.7" 2>/dev/null | jq -s '[{number: 7, labels: map({name: .})}]')"
+    prev=""
+    for a in "$@"; do  # --label : filtre en ET, comme le vrai gh
+      [ "$prev" = --label ] && data="$(jq --arg l "$a" '[.[] | select([.labels[].name] | index($l))]' <<<"$data")"
+      prev="$a"
+    done
+    jq -r "$(arg_after --jq "$@")" <<<"$data" ;;
+  "pr edit"*)
+    prev=""
+    for a in "$@"; do
+      case "$prev" in
+        --remove-label) { grep -vxF "$a" "$FAKE/labels.7" 2>/dev/null || true; } >"$FAKE/labels.tmp"
+                        mv "$FAKE/labels.tmp" "$FAKE/labels.7" ;;
+        --add-label) echo "$a" >>"$FAKE/labels.7" ;;
+      esac
+      prev="$a"
+    done ;;
+  "pr comment"*) arg_after --body "$@" >"$FAKE/comment" ;;
+  "pr merge"*)
+    if [ "${FAKE_MERGE_RC:-0}" != 0 ]; then
+      echo "GraphQL: Pull request is not mergeable (mergePullRequest) jeton ghp_FAKEtoken1234567890abcdef" >&2
+      exit 1
+    fi ;;
   *"--label factory:halt"*) c="$(cat "$FAKE/halt")"; [ "$c" = erreur ] && exit 1; echo "$c" ;;
   *"--label type:report"*) echo "https://github.com/test/vigie/issues/5" ;;
   *"pr list"*"--state merged"*) echo 2 ;;
@@ -43,7 +69,6 @@ case "$*" in
   *"pr view"*headRefOid*) echo abc123 ;;
   *"pr view"*"--json title"*) echo "fix: titre de la PR" ;;
   *"pr view"*"--json body"*) echo "Closes #2" ;;
-  "pr merge"*) exit "${FAKE_MERGE_RC:-0}" ;;
   *) exit 0 ;;
 esac
 EOF
@@ -127,12 +152,31 @@ expect "agent en échec : une notification" 1 "$(calls)"
 has_header 1 "Priority: high" && ok "agent en échec : priorité high" || ko "agent en échec : priorité"
 
 # --- merge et gates (gates.sh factice dans WORKDIR)
-printf '#!/usr/bin/env bash\nexit "${FAKE_GATES_RC:-0}"\n' >"$TMP/work/factory/gates.sh"
+printf '#!/usr/bin/env bash\necho x >>"$FAKE/gates-runs"\nexit "${FAKE_GATES_RC:-0}"\n' \
+  >"$TMP/work/factory/gates.sh"
 reset; merge_if_green 7 >/dev/null
 expect "PR mergée : une notification" 1 "$(calls)"
 has_header 1 "Click: https://github.com/test/vigie/pull/7" && ok "PR mergée : lien vers la PR" || ko "PR mergée : lien"
-reset; FAKE_MERGE_RC=1 merge_if_green 7 >/dev/null
-expect "merge refusé par GitHub : pas de notification « mergée »" 0 "$(calls)"
+
+# --- merge refusé par GitHub : bloquée, commentée, notifiée, et pas reprise au tick suivant
+reset; printf '%s\n' status:in-review review:approved security:approved >"$FAKE/labels.7"
+expect "PR approuvée deux fois : candidate au merge" 7 "$(first_fully_approved_pr)"
+for _ in 1 2; do
+  n="$(first_fully_approved_pr)"
+  [ -z "$n" ] || FAKE_MERGE_RC=1 merge_if_green "$n" >/dev/null 2>&1
+done
+expect "merge refusé : gates lancés une seule fois en deux ticks" 1 "$(grep -c x "$FAKE/gates-runs")"
+expect "merge refusé : labels restants" "status:blocked" "$(sort "$FAKE/labels.7" | paste -sd, -)"
+expect "merge refusé : plus repris par le reviewer" "" "$(first_in_review_missing review:approved)"
+case "$(cat "$FAKE/comment")" in *"not mergeable"*) ok "commentaire : sortie de gh pr merge" ;;
+  *) ko "commentaire sans la sortie de gh pr merge" ;; esac
+if grep -q ghp_FAKEtoken "$FAKE/comment"; then ko "commentaire : jeton GitHub non masqué"
+else ok "commentaire : jeton GitHub masqué"; fi
+expect "merge refusé : une notification" 1 "$(calls)"
+has_header 1 "Title: Merge refusé : PR #7" && has_header 1 "Priority: high" \
+  && has_header 1 "Click: https://github.com/test/vigie/pull/7" \
+  && ok "merge refusé : titre, high, lien" || ko "merge refusé : en-têtes"
+
 reset; FAKE_GATES_RC=1 merge_if_green 7 >/dev/null
 expect "gates rouges : une notification" 1 "$(calls)"
 has_header 1 "Priority: high" && ok "gates rouges : priorité high" || ko "gates rouges : priorité"

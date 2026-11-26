@@ -154,7 +154,7 @@ halt_gate() {
 # ---------------------------------------------------------------- étapes
 
 merge_if_green() {
-  local pr="$1" head title closes
+  local pr="$1" head title closes merge_out
   head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)"
   log "gates sur PR #$pr ($head)"
   if (cd "$WORKDIR" && bash factory/gates.sh --pr "$pr") >"$LOG_DIR/gates-pr$pr.log" 2>&1; then
@@ -162,15 +162,25 @@ merge_if_green() {
     # et uniquement si la tête de PR est celle que les gates ont validée.
     title="$(gh pr view "$pr" --repo "$REPO" --json title --jq .title)"
     closes="$(gh pr view "$pr" --repo "$REPO" --json body --jq .body | grep -oiE '^(closes|fixes) #[0-9]+' || true)"
-    if gh pr merge "$pr" --repo "$REPO" --squash --delete-branch \
+    if merge_out="$(gh pr merge "$pr" --repo "$REPO" --squash --delete-branch \
         --match-head-commit "$head" \
         --author-email "$GIT_AUTHOR_EMAIL" \
         --subject "$title (#$pr)" \
-        --body "${closes:-PR #$pr}"; then
+        --body "${closes:-PR #$pr}" 2>&1)"; then
       log "✓ PR #$pr mergée"
       notify "PR #$pr mergée" default white_check_mark "https://github.com/$REPO/pull/$pr" "$title"
     else
-      log "✗ merge de la PR #$pr refusé par GitHub"
+      # Sans approbations ni status:in-review, aucune règle du tick ne reprend la PR : pas de
+      # boucle reviewer → gates → refus. status:blocked la laisse au board.
+      log "✗ merge de la PR #$pr refusé par GitHub : PR bloquée"
+      gh pr comment "$pr" --repo "$REPO" --body "merge refusé par GitHub malgré des gates verts. PR bloquée pour le board. sortie de gh pr merge :
+\`\`\`
+$(printf '%s\n' "$merge_out" | tail -n 30 | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/[jeton masqué]/g')
+\`\`\`"
+      gh pr edit "$pr" --repo "$REPO" \
+        --remove-label review:approved --remove-label security:approved --remove-label status:in-review \
+        --add-label status:blocked
+      notify "Merge refusé : PR #$pr" high warning "https://github.com/$REPO/pull/$pr" "$title"
     fi
   else
     gh pr comment "$pr" --repo "$REPO" --body "gates rouges. extrait :
