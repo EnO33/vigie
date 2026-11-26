@@ -37,6 +37,9 @@ re-vérifier avec `pkg-config`.
   (l. 259-282 puis l. 419-420) : ils sont perdus sans erreur (`register_uri_scheme`, l. 381, va aussi sur ce contexte inutilisé ; effet
   côté WebKit **non vérifié**). Ce dont la vue liée hérite vient de WebKitGTK,
   doc non lue : **non vérifié.** Compte pour « rien sur disque » et pour `PageEngine`.
+  « Rien sur disque » : `WebContext::new(Some(dir))` écrit les cookies **en clair** dans `dir/cookies`
+  (`src/webkitgtk/web_context.rs` l. 42-45, `CookiePersistentStorage::Text`) ; voir aussi
+  `set_persistent_credential_storage_enabled` (`webkit2gtk-2.0.2/src/auto/website_data_manager.rs` l. 606).
   Sans `with_web_context` ni `with_incognito`, wry prend `WebContext::default()` = `Self::new(None)`
   (`R/wry-0.57.3/src/web_context.rs` l. 97-98) : wry ne fournit aucun `WebsiteDataManager`
   (`src/webkitgtk/web_context.rs` l. 32-50). Persistance par défaut de WebKit : **non vérifié.** **Aucun** réglage de
@@ -96,7 +99,9 @@ re-vérifier avec `pkg-config`.
   rien de spécifique au profil sur disque, **mais** « installation-specific data will still be persisted
   in root_cache_path ». Doc de `root_cache_path` (doc l. 17812, champ l. 17813) : si les deux sont vides, répertoire par
   défaut `~/.config/cef_user_data` sous Linux ; verrou singleton basé sur cette valeur depuis CEF 120.
-  Donc « rien sur disque » n'est pas acquis : des données d'installation restent écrites.
+  Donc « rien sur disque » n'est pas acquis : des données d'installation restent écrites. Reste de la doc C de
+  `root_cache_path` : défaut « not recommended in production », plusieurs instances sur le même dossier : « data corruption »,
+  verrou singleton ; personnaliser `root_cache_path` et implémenter `OnAlreadyRunningAppRelaunch` (cef-dll-sys doc l. 17812) : à reprendre pour le prototype CEF.
 - Préférences et policies : `cef::Settings.chrome_policy_id` (`cef` l. 584 ; doc C `cef-dll-sys-…` doc l. 17845, champ l. 17846 :
   active les policies Chrome via la plateforme/l'utilisateur OS, par ex. `/etc/opt/chrome/policies` sous
   Linux, « Only supported with Chrome style »). Préférences à l'exécution : `ImplPreferenceManager`
@@ -130,7 +135,7 @@ re-vérifier avec `pkg-config`.
   (`src/webkitgtk/mod.rs` l. 314-316, 351-352, 757 ; `ipc_enabled` conditionne l. 351). WebView2 :
   idem, `window.ipc` n'est posé que dans `attach_ipc_handler` (`src/webview2/mod.rs` l. 516-517, 984-993).
   Pas de pont wry sans `with_ipc_handler` ; un custom protocol enregistré (`register_uri_scheme`,
-  `src/webkitgtk/mod.rs` l. 381) reste un canal page→hôte via `fetch`. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
+  `src/webkitgtk/mod.rs` l. 381 ; WebView2 : `add_WebResourceRequested`, `src/webview2/mod.rs` l. 1076) reste un canal page→hôte via `fetch`. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
   sans handler : **non vérifié.** `grep -rn IsWebMessageEnabled R/wry-0.57.3/src` : aucun résultat,
   wry ne coupe donc pas ce canal côté runtime.
 - `with_initialization_script` (`lib.rs` l. 1011) : WebKitGTK crée `UserScript::new(…, &[], &[])` à
@@ -153,19 +158,23 @@ re-vérifier avec `pkg-config`.
 Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 - Titre : `with_document_title_changed_handler(impl Fn(String))` l. 1426.
 - Chargement : `with_on_page_load_handler(impl Fn(PageLoadEvent, String))` l. 1448.
-- Navigation autorisée : `with_navigation_handler(impl Fn(String) -> bool)` l. 1309. Portée exacte, WebKitGTK : vue principale, décision seulement pour
+- Navigation autorisée : `with_navigation_handler(impl Fn(String) -> bool)` l. 1309. Portée exacte, WebKitGTK : la WebView construite, pas les popups ; décision seulement pour
   `PolicyDecisionType::NavigationAction` (`src/webkitgtk/mod.rs` l. 563-566, sinon `return false`) ; sans URI
   dans la requête, `false` sans décision (l. 589) : défaut WebKit. WebView2 : branché sur `add_NavigationStarting`
-  seul (`src/webview2/mod.rs` l. 781) ; `grep FrameNavigationStarting src/webview2/mod.rs` : 0, la navigation
-  des iframes n'est jamais vue par le handler.
+  seul (`src/webview2/mod.rs` l. 781) ; `grep FrameNavigationStarting src/webview2/mod.rs` : 0, wry ne branche pas
+  `FrameNavigationStarting`. Que `NavigationStarting` couvre les iframes : **non vérifié** (doc Microsoft non lue) ;
+  que les sous-frames passent par `NavigationAction` côté WebKitGTK : **non vérifié** (écart Linux/Windows sur les iframes inconnu).
 - Nouvelle fenêtre : `with_new_window_req_handler` l. 1407. Réserve `NewWindowResponse::Allow`, Linux
   (`src/webkitgtk/mod.rs` l. 518-552) : wry crée lui-même une vue liée avec `WebViewAttributes { ..Default::default() }`
-  (l. 537-546) : ni handler de navigation, ni script d'init, ni incognito, ni proxy (touche « rien sur
-  disque » et Q5) ; 3 `unwrap` : `toplevel()` l. 520, `downcast::<gtk::ApplicationWindow>()` l. 521,
+  (l. 537-546) : attributs wry par défaut : ni handler de navigation, ni script d'init. Contexte (incognito, proxy)
+  hérité de la vue liée côté WebKit, `builder.web_context(…)` n'étant pas appelé (l. 419-423) : **non vérifié**
+  (touche « rien sur disque » et Q5) ; 3 `unwrap` : `toplevel()` l. 520, `downcast::<gtk::ApplicationWindow>()` l. 521,
   `application()` l. 523, panique si la vue n'est pas dans une `gtk::ApplicationWindow` liée à une
-  application. Windows : `Allow` → `SetHandled(false)` (`src/webview2/mod.rs` l. 874), popup ouverte par le
+  application ; `related_webviews.lock().unwrap()` l. 534 et 550 ; l'erreur de `new_gtk` est avalée par `.ok()` l. 553
+  après `window.show_all()` l. 537 : une fenêtre vide reste à l'écran. Windows : `Allow` → `SetHandled(false)` (`src/webview2/mod.rs` l. 874), popup ouverte par le
   runtime hors wry ; effet exact **non vérifié** (doc Microsoft non lue). `PageEngine` : jamais `Allow`
-  (`Create` ou `Deny`). Proxy : `with_proxy_config` l. 1460.
+  (`Create` ou `Deny`). Proxy : `with_proxy_config` l. 1460 ; sous Windows, avec `with_additional_browser_args`, il est **ignoré sans erreur** :
+  `--proxy-server` n'est ajouté que dans le défaut `unwrap_or_else` (`src/webview2/mod.rs` l. 334-362).
 - Vues multiples : `build_as_child` l. 1573 ; Linux **X11 uniquement**, Wayland via
   `WebViewBuilderExtUnix::build_gtk` (l. 2041, 2061) avec `gtk::Fixed` ; `gtk::init` requis, boucle GTK à
   avancer avec `gtk::main_iteration_do` ; **panique** si `gtk::init` n'a pas été appelé **dans le même
@@ -179,8 +188,9 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
   `gdk_display.downcast_ref::<X11Display>().unwrap()` quand le display GDK par défaut n'est pas X11.
   Réserve : wry demande `gtk = "0.18"` (`wry-0.57.3/Cargo.toml` l. 204-205), gtk-0.18.2 demande
   `gdk = "0.18"` (l. 74-75) ; gdk-0.18.2 est la seule version du registre, aucun Cargo.lock du dépôt ne
-  résout wry : version effective **non vérifiée.** Panique pour handle invalide hors Linux : **non vérifié.** En marche, aussi sous Linux : `with_on_page_load_handler` → `webview.uri().unwrap()`
-  (`src/webkitgtk/mod.rs` l. 491 et 494) ; IPC → `.expect("WebView does not have UserContentManager")` (l. 735). `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
+  résout wry : version effective **non vérifiée.** Panique pour handle invalide hors Linux : **non vérifié.** En marche, sous Linux : `with_on_page_load_handler` → `webview.uri().unwrap()`
+  (`src/webkitgtk/mod.rs` l. 491 et 494). Au build : IPC → `.expect("WebView does not have UserContentManager")` (l. 735,
+  `attach_ipc_handler` appelé l. 316 depuis `new_gtk`, `UserContentManager` toujours posé l. 408). `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
 - Conséquence : le futur `PageEngine` doit vérifier que le display GDK est X11 et que `gtk::init` a été
   appelé sur ce thread avant `build_as_child` ; valider le handle ne suffit pas (la panique ne se rattrape
   pas côté Rust strict : `catch_unwind` interdit, `clippy.toml` l. 18 ; `panic = "abort"` en release, `Cargo.toml` l. 85).
@@ -192,7 +202,7 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
 préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
-panique pour handle invalide hors Linux ; doc C de `set_preference` ; portée du handler de navigation (iframes WebView2, requête sans URI WebKitGTK) et effet de `Allow` sous Windows ; sens de `Ignore`/`Fail` (TLS) ; `load_uri` asynchrone ; héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
+panique pour handle invalide hors Linux ; doc C de `set_preference` ; portée du handler de navigation (iframes WebView2, requête sans URI WebKitGTK) et effet de `Allow` sous Windows ; sens de `Ignore`/`Fail` (TLS) ; `load_uri` asynchrone ; héritage du contexte (incognito, proxy) par une vue `with_related_view` ; couverture des iframes par `NavigationStarting` (WebView2) et des sous-frames par `NavigationAction` (WebKitGTK) ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; pont par défaut CEF ; `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
 
