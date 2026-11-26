@@ -45,3 +45,126 @@ Plugins (`factory/plugins.lock`, API releases GitHub)
 - Cargo signale les dépendances de workspace inutilisées (`cargo::unused_workspace_dependencies`).
 - Clippy : lint `assert_is_empty` (pedantic) disponible ; `disallowed-types` signale les chemins
   introuvables sauf `allow-invalid = true`.
+
+## 2026-11-26 — spike moteur : réglages réseau et modèle de processus (wry 0.57.3, cef 156.7.0)
+
+Sources : `R` = `$CARGO_HOME/registry/src/index.crates.io-1949cf8c6b5b557f/` (ici
+`/usr/local/cargo/registry/src/…`). Crates lus : `wry-0.57.3` (octets identiques au `.crate` téléchargé
+sur static.crates.io, `diff -rq` : seul `.cargo-ok` diffère), `webkit2gtk-2.0.2` (version imposée par
+`wry-0.57.3/Cargo.toml` l. 221, avec la feature `v2_40`, l. 53), `cef-156.7.0+156.0.31`,
+`cef-dll-sys-156.7.0+156.0.31`. Rien n'a été exécuté : tout est lu, rien n'est « mesuré ».
+`tao 0.37.3` n'a pas été lu (aucune question ne l'exige).
+Les doc comments de `webkit2gtk-2.0.2` sont vides : la sémantique vient de la doc officielle
+WebKitGTK, page `stable` (version affichée **2.42.5**, `webkitgtk.org/reference/webkit2gtk/stable/`),
+qui n'est pas forcément la version installée chez l'utilisateur : à re-vérifier avec `pkg-config`.
+
+### Q1 — WebKitGTK (Linux)
+- Accès au `WebView` WebKitGTK : `WebViewExtUnix::webview()` → `webkit2gtk::WebView`
+  (`R/wry-0.57.3/src/lib.rs` l. 2430 trait, l. 2447 impl). Tout réglage ci-dessous passe donc par là,
+  après `build_gtk`/`build_as_child`. `WebViewBuilder` n'expose aucun de ces réglages.
+- Ce que wry fait déjà (`src/webkitgtk/mod.rs`) : contexte éphémère si `with_incognito(true)`
+  (l. 259-260, `WebContext::new_ephemeral()`), proxy via `WebsiteDataManager` (l. 278-281),
+  `Settings` : webgl, webaudio, page cache, user agent, devtools, JS (l. 439-465). **Aucun** réglage de
+  préchargement DNS, d'audit de liens, de TLS ni de rapports n'est posé : les défauts WebKit s'appliquent.
+- Réglages réseau existants côté `webkit2gtk-2.0.2` :
+  - `SettingsExt::set_enable_dns_prefetching` (`src/auto/settings.rs` l. 1485). Doc 2.42.5 : « prefetch
+    domain names… avant que l'utilisateur suive un lien ». Défaut : non vérifié.
+  - `SettingsExt::set_enable_hyperlink_auditing` (l. 1549). Doc 2.42.5 : « hyperlink auditing is enabled ».
+    Défaut : non vérifié.
+  - `WebContextExt::set_tls_errors_policy` (`src/auto/web_context.rs` l. 688) : **déprécié depuis 2.32**
+    (doc 2.42.5, `class.WebContext.html`) ; `WebsiteDataManagerExt::set_tls_errors_policy`
+    (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616).
+  - `WebsiteDataManager` : `is_ephemeral` (l. 566, rien d'écrit sur disque), `set_itp_enabled` (l. 577),
+    `set_network_proxy_settings` (l. 589).
+- Prefetch de ressources (`<link rel=prefetch>`) : aucun réglage trouvé. **Non vérifié.**
+- Vérification de certificats en ligne (OCSP/CRL) et rapports/télémétrie : aucun réglage trouvé dans la
+  source lue ; le comportement vient de libsoup/GnuTLS, hors des crates lus. **Non vérifié.**
+- Le seul moyen sûr de dire « aucun trafic non initié » est la mesure (stories de mesure de l'epic #11).
+
+### Q2 — WebView2 (Windows), « non mesuré »
+- `WebViewBuilderExtWindows::with_additional_browser_args` existe : `R/wry-0.57.3/src/lib.rs` l. 1794
+  (déclaration), l. 1880-1881 (impl), valeur stockée l. 1753. Il vit dans `lib.rs`, pas dans
+  `src/webview2/` ; il est consommé en `src/webview2/mod.rs` l. 334-367
+  (`options.set_additional_browser_arguments`, l. 367).
+- Défaut de wry si on ne l'appelle pas (`src/webview2/mod.rs` l. 337) :
+  `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`, plus `--autoplay-policy=…` et
+  `--proxy-server=…` selon les attributs (l. 339-359). **Appeler la méthode remplace tout le défaut**
+  (doc l. 1786-1793) : il faut le recopier. Les webviews d'arguments différents exigent des dossiers
+  de données différents (même doc).
+- SmartScreen : `msSmartScreenProtection` est déjà dans la liste `--disable-features` de wry
+  (source ci-dessus). La page Microsoft « WebView2 features and flags » (consultée le 2026-11-26)
+  décrit le flag `msSmartScreenProtection` comme « Makes SmartScreen protection available ».
+- Mises à jour, rapports de crash, télémétrie : aucun flag vérifié. La page Microsoft ne contient ni
+  « telemetry » ni `msEdgeUpdate`. **Non vérifié.**
+- `with_incognito` : doc l. 1434-1441 de `lib.rs` (profil InPrivate, version minimale du runtime à lire).
+
+### Q3 — CEF 156.7.0
+- Point d'entrée des switches : `ImplApp::on_before_command_line_processing(&self, process_type:
+  Option<&CefString>, command_line: Option<&mut CommandLine>)` —
+  `R/cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 33805. API `CommandLine` :
+  `append_switch` (l. 28723), `append_switch_with_value` (l. 28725), `has_switch` (l. 28717).
+  Doc C (`cef-dll-sys-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 30666) :
+  `process_type` est `NULL` pour le processus navigateur ; les valeurs de `CefSettings` équivalentes à un
+  switch sont posées avant l'appel ; `command_line_args_disabled` démarre avec une ligne vide.
+  Modifier les processus enfants peut provoquer « undefined behavior including crashes ».
+- Autre point : `ImplBrowserProcessHandler::on_before_child_process_launch` (l. 29342).
+- `Settings` (`cef_settings_t`, l. 558-586) : `no_sandbox`, `cache_path`, `root_cache_path`,
+  `persist_session_cookies`, `command_line_args_disabled`, `accept_language_list`, `disable_signal_handlers`.
+  Un `cache_path` vide donne un profil en mémoire : **non vérifié** (doc non lue).
+- Noms de switches Chromium (mises à jour de composants, Safe Browsing, rapports de crash, domain
+  reliability, préchargement, variations) : **non vérifié.** Ils ne figurent pas dans les crates `cef`
+  (recherche de `disable-component-update`, `disable-background-networking`, `no-pings`,
+  `disable-domain-reliability`, `disable-field-trial`… : aucune occurrence), et les sources Chromium
+  de la version 156 n'ont pas pu être lues (`raw.githubusercontent.com` : HTTP 429 ;
+  `chromium.googlesource.com` : 404). À établir dans une story dédiée, avec la source Chromium de 156.0.31.
+
+### Q4 — Modèle de processus
+- CEF : le crash du rendu est signalé au processus navigateur par
+  `ImplRequestHandler::on_render_process_terminated(browser, status: TerminationStatus, error_code,
+  error_string)` (`cef` l. 27024 ; doc C `cef-dll-sys` l. 28920 : « Called on the browser process UI
+  thread when the render process terminates unexpectedly »). Le callback tourne dans le processus hôte,
+  ce qui montre qu'il existe un processus séparé ; que l'hôte survive à un crash reste **non mesuré**.
+  Aussi `on_render_process_unresponsive` (l. 27014, 15 s sans événement d'entrée, doc C).
+- WebKitGTK : `WebViewExt::connect_web_process_terminated` (`webkit2gtk-2.0.2/src/auto/web_view.rs`
+  l. 2853) ; wry 0.57.3 ne le connecte pas (`grep web_process_terminated src/` : aucun résultat),
+  il faut passer par `WebViewExtUnix::webview()`. Survie de l'hôte : **non mesuré**.
+- WebView2 : wry ne gère pas l'événement `ProcessFailed` (`grep ProcessFailed src/` : aucun résultat) ;
+  accessible via `WebViewExtWindows::webview() -> ICoreWebView2` (`lib.rs` l. 2351). **Non mesuré.**
+
+### Q5 — Isolation des scripts
+- WebKitGTK : sans `with_ipc_handler`, wry n'enregistre ni le message handler `ipc` ni `window.ipc`
+  (`src/webkitgtk/mod.rs` l. 314-316, 351-352, 757 ; `ipc_enabled` conditionne l. 351). WebView2 :
+  idem, `window.ipc` n'est posé que dans `attach_ipc_handler` (`src/webview2/mod.rs` l. 516-517, 984-993).
+  Pas de pont wry sans handler. Que `window.chrome.webview` soit exposé par le runtime WebView2 même
+  sans handler : **non vérifié.**
+- `with_initialization_script` (`lib.rs` l. 1011) : WebKitGTK crée `UserScript::new(…, &[], &[])` à
+  `UserScriptInjectionTime::Start` (`src/webkitgtk/mod.rs` l. 829-841) ; `webkit2gtk-2.0.2` n'offre pas
+  de variante « pour un monde » (`src/auto/user_script.rs` : seul `new`, l. 21) : monde de la page, pas
+  de monde isolé. WebView2 : `AddScriptToExecuteOnDocumentCreated` (`src/webview2/mod.rs` l. 1444) ;
+  monde de la page selon la doc Microsoft : **non vérifié** (doc non lue). Sous Windows les scripts
+  vont toujours dans les sous-frames (doc `lib.rs` l. 1004 et 1029).
+- CEF : pas de pont par défaut. Les scripts s'exécutent côté rendu, dans
+  `ImplRenderProcessHandler::on_context_created` (`cef` l. 32690 ; doc C l. 30458 : « immediately after
+  the V8 context for a frame has been created »). `src/wrapper/message_router.rs` fournit un routeur de
+  messages ; il n'est actif que si on l'installe. Monde isolé : **non vérifié.**
+
+### Q6 — Capacités pour `PageEngine` (wry)
+Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
+- Titre : `with_document_title_changed_handler(impl Fn(String))` l. 1426.
+- Chargement : `with_on_page_load_handler(impl Fn(PageLoadEvent, String))` l. 1448.
+- Navigation autorisée : `with_navigation_handler(impl Fn(String) -> bool)` l. 1309 (`false` bloque).
+- Nouvelle fenêtre : `with_new_window_req_handler` l. 1407. Proxy : `with_proxy_config` l. 1460.
+- Vues multiples : `build_as_child` l. 1573 ; Linux **X11 uniquement**, Wayland via
+  `WebViewBuilderExtUnix::build_gtk` (l. 2041, 2061) avec `gtk::Fixed` ; `gtk::init` requis, boucle GTK à
+  avancer avec `gtk::main_iteration_do` ; **panique** si le handle est invalide ou `gtk::init` n'a pas été
+  appelé (doc l. 1541-1544 et 1569-1572). `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
+- Conséquence : le futur `PageEngine` ne peut appeler `build_as_child` qu'après avoir validé le handle
+  et l'init GTK (la panique ne se rattrape pas côté Rust strict).
+- CEF : titre `on_title_change` (`cef` l. 17770), URL `on_address_change` (l. 17762), chargement
+  `on_load_start` (l. 21584) / `on_load_end` (l. 21592), navigation `on_before_browse` (l. 26940).
+  Vues multiples côté CEF : **non vérifié.**
+
+### Non vérifié (récapitulatif)
+Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
+télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
+monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
