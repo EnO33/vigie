@@ -6,8 +6,8 @@
 # Contrat du prototype : écrire VIGIE_SPIKE_READY seul sur une ligne de stdout quand sa première
 # page est affichée, et VIDER son tampon (flush) juste après : stdout est un fichier, donc
 # bufferisé par blocs en C ou Python. À défaut, envelopper la commande avec `stdbuf -oL`.
-# Linux uniquement (/proc, setsid). Les descendants qui créent leur propre session (setsid)
-# échappent à la mesure mémoire et à l'arrêt.
+# Linux uniquement (/proc, setsid). Mesure et arrêt portent sur la session de l'instance : un
+# descendant qui change de groupe (setpgid) y reste, un qui crée sa propre session (setsid) y échappe.
 
 die() { echo "measure.sh: $*" >&2; exit 2; }
 
@@ -37,16 +37,25 @@ set -euo pipefail
 
 TMP="$(mktemp -d)"
 PID=""
-# Tue tout le groupe de l'instance : TERM, puis KILL si elle s'obstine ou laisse des orphelins.
+# session_pids : pids vivants (hors zombies) de la session de l'instance, même sélection que
+# tree_rss_kb. Un descendant qui change de groupe (setpgid, `set -m`) reste dans la session.
+session_pids() {
+  { cat /proc/[0-9]*/stat 2>/dev/null || true; } |
+    awk -v sid="$PID" '{ p = $1; sub(/^.*\) /, ""); if ($4 == sid && $1 != "Z") print p }'
+}
+# Tue toute la session de l'instance : TERM, puis KILL si elle s'obstine ou laisse des orphelins.
 stop() {
   [ -n "$PID" ] || return 0
-  kill -TERM -- "-$PID" 2>/dev/null || true
-  for _ in $(seq 1 20); do alive "$PID" || break; nap 0.1; done
-  kill -KILL -- "-$PID" 2>/dev/null || true
+  local pids i; pids="$(session_pids)"
+  [ -z "$pids" ] || kill -TERM $pids 2>/dev/null || true
+  for ((i = 0; i < 20; i++)); do [ -z "$(session_pids)" ] && break; nap 0.1; done
+  pids="$(session_pids)"
+  [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   wait "$PID" 2>/dev/null || true
   PID=""
 }
-cleanup() { stop; rm -rf "$TMP"; }
+# Signaux ignorés pendant le nettoyage : un 2e TERM/INT ne doit pas couper l'envoi du KILL.
+cleanup() { trap '' INT TERM; stop; rm -rf "$TMP"; }
 # EXIT lance cleanup, y compris via ces deux traps (un signal tué sans trap laisserait l'instance).
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -116,7 +125,7 @@ case "$MODE" in
   startup)
     [ -n "$RUNS" ] || die "--runs requis"
     samples=()
-    for _ in $(seq 1 "$RUNS"); do
+    for ((r = 0; r < RUNS; r++)); do
       now; t0="$NOW_MS"; spawn "$TMP/out" "$@"; wait_ready "$TMP/out"
       now; samples+=($(( NOW_MS - t0 ))); stop
     done
@@ -127,6 +136,7 @@ case "$MODE" in
   memory)
     [ -n "$SETTLE" ] || die "--settle requis"
     spawn "$TMP/out" "$@"; wait_ready "$TMP/out"; nap "$SETTLE"
+    alive "$PID" || die "la commande s'est arrêtée pendant --settle"
     kb="$(tree_rss_kb)"
     [[ $kb =~ ^[0-9]+$ ]] && [ "$kb" -gt 0 ] || die "mesure mémoire illisible : '$kb'"
     echo "memory_rss_mb=$(( kb / 1024 ))" ;;
@@ -139,7 +149,7 @@ case "$MODE" in
     # Seules les familles AF_INET/AF_INET6 : AF_UNIX et AF_NETLINK (Wayland, D-Bus…) ne sont pas du réseau.
     # Limite : un send() sans adresse sur socket déjà connectée n'est pas tracé ici.
     echo "network_calls=$(grep -cE '^[0-9]+ +(connect|sendto|sendmsg|sendmmsg)\(.*sa_family=AF_INET6?,' "$TMP/trace" || true)"
-    sed -nE 's/.*sin6?_port=htons\(([0-9]+)\).*inet_addr\("([^"]+)"\).*/\2:\1/p; s/.*sin6_port=htons\(([0-9]+)\).*"([^"]+)", &sin6_addr.*/\2:\1/p' "$TMP/trace" |
+    sed -nE 's/.*sin6?_port=htons\(([0-9]+)\).*inet_addr\("([^"]+)"\).*/\2:\1/p; s/.*sin6_port=htons\(([0-9]+)\).*"([^"]+)", &sin6_addr.*/[\2]:\1/p' "$TMP/trace" |
       sort -u | sed 's/^/network_dest=/' ;;
   *) die "mode inconnu : $MODE" ;;
 esac
