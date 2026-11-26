@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 5
+    # Règle des 7 jours (docs/engineering/FRESHNESS.md) : pas de PR pour une version publiée depuis
+    # moins de 7 jours. Ne s'applique pas aux mises à jour de sécurité (doc Dependabot, « cooldown »).
+    cooldown:
+      default-days: 7
     labels: [type:chore, area:factory]
     groups:
       patch-and-minor:
@@ -15,3 +19,7 @@ updates:
     schedule:
       interval: weekly
     labels: [type:chore, area:factory]
+    # Règle des 7 jours (docs/engineering/FRESHNESS.md) : pas de PR pour une version publiée depuis
+    # moins de 7 jours. Ne s'applique pas aux mises à jour de sécurité (doc Dependabot, « cooldown »).
+    cooldown:
+      default-days: 7
