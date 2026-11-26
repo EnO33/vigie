@@ -8,7 +8,8 @@ Sources : `R` = `/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/
 et API `crates.io/api/v1/crates/<crate>/versions` (date `created_at`, champ `yanked`). Seuil des 7 jours :
 publiée au plus tard le 2026-11-19. Rien n'a été compilé ni exécuté : tout est lu.
 Référence wry : **0.57.3** (2026-11-18, 8 jours), comme demandé. `cargo info wry` donne aujourd'hui
-0.58.2 (publiée aujourd'hui, donc non éligible) ; 0.58.1 est yankée ; 0.57.4 date du 2026-11-25. Non évalué ici.
+0.58.2 (publiée aujourd'hui, donc non éligible) ; 0.58.1 est yankée ; 0.58.0 date du 2026-11-25 (non yankée,
+MSRV 1.92 contre 1.85 en 0.57.x, API crates.io) ; 0.57.4 date du 2026-11-25. Non évalué ici.
 Licences admises (`deny.toml`, `[licenses] allow`) : MIT, Apache-2.0 (± LLVM-exception), BSD-2/3-Clause,
 ISC, MPL-2.0, Unicode-3.0, Zlib. Le critère MSRV ne vaut que pour le crate de tête (`rust-version` de
 son `Cargo.toml`) ; celui des dépendances transitives n'a pas été relevé.
@@ -29,12 +30,13 @@ Le `W` est implicitement `Sized`, mais `impl<H: HasWindowHandle + ?Sized> HasWin
 | | eframe 0.37.0 | iced 0.14.0 | Slint 1.19.0 (1.19.1 non éligible) |
 |---|---|---|---|
 | Publiée | 2026-10-15 (42 j) | 2025-12-07 (354 j) | 1.19.0 : 2026-11-16 (10 j) ; 1.19.1 : 2026-11-24 (2 j), non éligible |
-| Licence | Tête : `MIT OR Apache-2.0`. Avec `default`, `default_fonts` tire `epaint_default_fonts` : `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` (`eframe-0.37.0/Cargo.toml` `default` l. 61-72 → `egui-0.37.0/Cargo.toml` l. 63 → `epaint-0.37.0/Cargo.toml` l. 64 → `epaint_default_fonts-0.37.0/Cargo.toml` l. 46). OFL-1.1 et Ubuntu-font-1.0 **ne sont pas dans `deny.toml` `allow`**, sans exception : **admise seulement sans `default_fonts`** | Tête : `MIT`. Licences transitives : **non vérifié** | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` (champ `license` crates.io de 1.19.0, identique en 1.19.1) : **éliminé (licence)** |
+| Licence | Tête : `MIT OR Apache-2.0`. Admise sans `default_fonts` (voir « Condition de licence ») | Tête : `MIT`. Licences transitives : **non vérifié** | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` (champ `license` crates.io de 1.19.0, identique en 1.19.1) : **éliminé (licence)** |
 | MSRV (crate de tête) | 1.95 | 1.88 | 1.95 (champ `rust_version` crates.io de 1.19.0) |
 | `raw-window-handle` | 0.6.2, `eframe-0.37.0/Cargo.toml` l. 169-170 | 0.6, `iced_runtime-0.14.0/Cargo.toml` l. 57-58 | 0.6 derrière la feature `raw-window-handle-06`, absente de `default` (`slint-1.19.1/Cargo.toml.orig` l. 95-97 ; 1.19.0 non lue) |
 | `HasWindowHandle` | **implémenté directement** : `impl HasWindowHandle for Frame` (`eframe-0.37.0/src/epi.rs` l. 750) et pour `CreationContext` (l. 101) | pas sur un type de l'application : `window::run(id, f: impl FnOnce(&dyn Window) -> T + Send + 'static)` (`iced_runtime-0.14.0/src/window.rs` l. 463-466), `trait Window: HasWindowHandle + HasDisplayHandle` (l. 196) | `slint::WindowHandle: HasWindowHandle` (`i-slint-core-1.19.1/api.rs` l. 412-419 ; 1.19.0 non lue) |
 | X11 | feature `x11` l. 113-121 de `eframe-0.37.0/Cargo.toml`, dans `default` (`cargo info`) | `x11` et `wayland` dans `default` (`cargo info`) | non examiné (éliminé) |
 | GTK initialisé | **non vérifié** (aucun code d'eframe ne touche GTK) | idem | non examiné |
+| Vue enfant CEF | **non examiné** (aucune lecture de `cef` pour ce critère) | non examiné | non examiné (éliminé) |
 | Exemple public avec vue web enfant | aucun : `emilk/egui/examples` (API GitHub) n'en contient pas : « non vérifié » | aucun dans `iced-rs/iced/examples` : « non vérifié » | aucun dans `slint-ui/slint/examples` : « non vérifié » |
 
 Faits liés :
@@ -81,28 +83,48 @@ API wry 0.57.3 (`src/lib.rs`) :
 - Chargement de l'interface : `with_custom_protocol` (l. 1076) sert le HTML/CSS local ; pas d'URL distante.
 - Schéma : page → (callbacks Rust) → état de l'application → `evaluate_script` → vue d'interface ;
   interface → `ipc_handler` → commandes typées Rust (valider chaque message : donnée non fiable) → actions
-  sur les `WebView` de page (`load_url`, `set_bounds`). La page ne voit jamais `window.ipc`, **à condition que
-  la vue d'interface ne navigue jamais ailleurs** : `window.ipc` est injecté dans chaque document de cette
-  vue (`mod.rs` l. 351-352), un lien ou une redirection suivi donnerait le pont à un document distant. Donc :
-  (1) la vue d'interface reçoit un `with_navigation_handler` (l. 1309) qui refuse tout ce qui n'est pas son
-  schéma custom ; (2) le handler IPC vérifie l'origine de chaque `Request` (son URI, construite l. 731-758 par
-  `webview.uri()`) avant d'exécuter la commande. Non vérifié :
-  qu'un script de page ne puisse pas atteindre la vue d'interface (vues distinctes, pas d'iframe, donc pas
-  de partage d'origine attendu ; non testé).
-- Même limite Linux que (B) (voir plus haut). CEF : non examiné dans ce spike.
-- Condition d'isolation : `with_custom_protocol` s'enregistre sur le **`WebContext`**, pas sur la vue
-  (`R/wry-0.57.3/src/webkitgtk/mod.rs` l. 381 `web_context.register_uri_scheme` ; `webkitgtk/web_context.rs`
-  l. 130-144 `register_uri_scheme_as_secure`). Sans `new_with_web_context`, chaque vue reçoit un contexte neuf
-  (`mod.rs` l. 263-268). **La vue d'interface doit avoir son propre `WebContext`, jamais partagé avec les
-  pages**, sinon une page peut demander le schéma de l'interface (atteignabilité réelle : non vérifiée).
-- Vue enfant CEF pour (B) : eframe, iced, Slint : **non examiné** (aucune lecture de `cef` pour ce critère).
+  sur les `WebView` de page (`load_url`, `set_bounds`). La page ne voit jamais `window.ipc` tant que les
+  conditions ci-dessous tiennent.
+- Même limite Linux que (B) (voir plus haut).
+
+Conditions d'isolation (vue d'interface) :
+1. **Navigation** : `window.ipc` est injecté par `init(.., true)` (`mod.rs` l. 351-352), soit
+   `UserContentInjectedFrames::TopFrame` (l. 832-833) : seulement les documents de premier niveau de cette vue.
+   Un lien ou une redirection suivi donnerait le pont à un document distant. La vue d'interface reçoit donc un
+   `with_navigation_handler` (l. 1309) qui refuse tout ce qui n'est pas son schéma custom.
+2. **Origine IPC** : la `Request` porte `webview.uri()` (`mod.rs` l. 745), l'URI de premier niveau **de la
+   vue**, pas celle du frame émetteur. Le contrôle d'origine du handler ne protège donc que ce que (1) couvre
+   déjà. Le handler `ipc` est enregistré sur le `UserContentManager` (l. 757), pas sur un frame.
+3. **Aucune iframe** dans l'interface (par ex. CSP `frame-src 'none'`, non vérifié) : un sous-frame distant
+   appelant `window.webkit.messageHandlers.ipc.postMessage` directement passerait le contrôle (2).
+   **Non vérifié : accès d'un sous-frame à `window.webkit.messageHandlers.ipc` sous WebKitGTK.**
+4. **`WebContext` propre** : `with_custom_protocol` s'enregistre sur le **`WebContext`**, pas sur la vue
+   (`webkitgtk/mod.rs` l. 381 `web_context.register_uri_scheme` ; `webkitgtk/web_context.rs` l. 130-144
+   `register_uri_scheme_as_secure`). Sans `new_with_web_context`, chaque vue reçoit un contexte neuf
+   (`mod.rs` l. 263-268). La vue d'interface doit avoir son propre `WebContext`, jamais partagé avec les
+   pages, sinon une page peut demander le schéma de l'interface (atteignabilité réelle : non vérifiée).
+
+Non vérifié : qu'un script de page ne puisse pas atteindre la vue d'interface (vues distinctes, donc pas de
+partage d'origine attendu ; non testé).
 
 ### Recommandation
 
 Prototyper **(B) avec eframe 0.37.0**. Raisons vérifiées : seul candidat à la fois éligible (MSRV 1.95 ≤ 1.100, release de 42 jours, la plus récente des deux éligibles) et dont `Frame` implémente
-`HasWindowHandle` (`epi.rs` l. 750) : `build_as_child(&frame)` passe sans adaptateur. iced est éligible mais
+`HasWindowHandle` (`epi.rs` l. 750) : `build_as_child(&frame)` passe sans adaptateur (lu, pas compilé). iced est éligible mais
 sans release du crate `iced` depuis 354 jours (`iced_winit` 0.14.1 : 2026-09-13) et sans type portant le handle (closure `Send`). Slint est éliminé (licence).
-**Condition de licence** : eframe n'est admissible qu'avec `default-features = false` sans `default_fonts` (sinon OFL-1.1 et Ubuntu-font-1.0 échouent `cargo deny`), ou après une issue `type:chore` `area:factory` au board pour élargir `deny.toml`. Licences transitives des autres features : non vérifié.
+**Condition de licence** : `default` d'eframe (`Cargo.toml` l. 61-72) contient `default_fonts` → `egui/default_fonts`
+(`egui-0.37.0/Cargo.toml` l. 63) → `epaint_default_fonts` (`epaint-0.37.0/Cargo.toml` l. 64), de licence
+`(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` (`epaint_default_fonts-0.37.0/Cargo.toml` l. 46).
+OFL-1.1 et Ubuntu-font-1.0 ne sont pas dans `deny.toml` `allow`, sans exception : `cargo deny` les refuse.
+Deux voies : (a) issue `type:chore` `area:factory` au board pour élargir `deny.toml` ; (b) `default-features = false`,
+qui retire aussi `wgpu`, `x11`, `winit/default` et `system_fonts` : réactiver `x11`, `wgpu` ou `glow`
+(`NativeOptions::event_loop_builder` et `create_native` n'existent que sous
+`cfg(any(feature = "glow", feature = "wgpu_no_default_features"))`, `epi.rs` l. 353-354, `lib.rs` l. 375-376),
+et une source de police : `system_fonts` (`Cargo.toml` l. 92), ou une police embarquée sous une licence de `allow`.
+Sans police, `MissingGlyphPolicy` vaut `Tofu` par défaut (`epaint-0.37.0/src/text/fonts.rs` l. 57-61) et eframe
+installe `MissingSystemFontsWarning` (`src/native/epi_integration.rs` l. 151-165, 262-263). Licences transitives
+de ces features : **non vérifié**. `deny.toml` a `[graph] all-features = true` : la condition doit valoir pour
+toutes les features du workspace, aucune ne doit transmettre `eframe/default` ni `default_fonts`.
 Le prototype doit trancher les points non vérifiés : X11 forcé sous une session Wayland, `gtk::init` +
 `main_iteration_do` depuis la boucle eframe (essayer aussi `eframe::create_native`, `eframe-0.37.0/src/lib.rs`
 l. 376, avec sa propre boucle winit comme l'exemple wry ; sinon `main_iteration_do` dans `ui()` n'est pas appelé
