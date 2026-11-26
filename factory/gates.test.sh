@@ -46,6 +46,20 @@ git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@exam
   commit -q -am "chore: gates complaisants"
 git -C "$TMP/wd" push -q origin HEAD:refs/pull/8/head
 
+# PR 9 : partie d'une base plus ancienne, à qui manque un test de l'outillage que main a reçu
+# depuis. main avance ensuite (base + test restauré) : la PR ne touche à rien de protégé.
+g() { git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid "$@"; }
+g checkout -q -B base origin/main
+g rm -q factory/orchestrator-notify.test.sh
+g commit -q -m "chore: base sans le test ntfy"
+g checkout -q -B pr9
+g commit -q --allow-empty -m "docs: PR partie de l'ancienne base"
+g push -q origin pr9:refs/pull/9/head
+g checkout -q base
+g checkout -q origin/main -- factory/orchestrator-notify.test.sh
+g commit -q -m "chore: main reçoit le test ntfy"
+g push -q origin base:refs/heads/main
+
 # Lance « gates.sh --pr <N> » (7 par défaut) ; FAIL_STEP vide = aucun échec.
 run_pr() {
   : >"$TMP/calls"; : >"$TMP/statuses"
@@ -76,6 +90,10 @@ for step in fmt clippy test xtask deny llvm-cov; do
     echo "FAIL étape cargo $step rouge : « $next » a tourné après l'échec"; failures=$((failures + 1))
   fi
 done
+
+# Les tests de l'outillage viennent de main, pas du worktree d'une PR plus ancienne.
+run_pr "" 9
+check "PR partie d'une base sans un test d'outillage récent" success
 
 # Les contrôles viennent du gates.sh de confiance, pas de la copie de la PR.
 run_pr "" 8

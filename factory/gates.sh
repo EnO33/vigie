@@ -12,6 +12,9 @@ ROOT="$(git rev-parse --show-toplevel)"
 # Chemin absolu de ce script, résolu avant tout cd : en mode --pr, le processus enfant doit être
 # ce gates.sh (celui de main), jamais la copie du worktree de la PR.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Outillage de confiance (le dossier factory/ de ce script) : ses tests ne dépendent pas de la
+# PR, dont le worktree peut précéder un ajout à factory/ sur main.
+FACTORY_DIR="$(dirname "$SELF")"
 BASE_REF="${BASE_REF:-origin/main}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
 PROTECTED_RE='^(VISION\.md|CLAUDE\.md|docs/(factory|engineering)/|clippy\.toml|deny\.toml|rustfmt\.toml|rust-toolchain\.toml|\.claude/|\.zed/|\.githooks/|\.github/|docker/|docker-compose\.yml|factory/|xtask/|\.cargo/)'
@@ -63,11 +66,13 @@ run_mutants_on_diff() {
 }
 
 run_gates() {
-  step "modes";         bash factory/check-modes.test.sh
-                        bash factory/check-modes.sh
-  step "hooks";         bash factory/hooks/guard.test.sh
-                        bash factory/orchestrator.test.sh
-                        bash factory/orchestrator-notify.test.sh
+  # Tests de l'outillage : depuis FACTORY_DIR. check-modes.sh, lui, vérifie l'index du répertoire
+  # courant (le worktree de la PR en mode --pr).
+  step "modes";         bash "$FACTORY_DIR/check-modes.test.sh"
+                        bash "$FACTORY_DIR/check-modes.sh"
+  step "hooks";         bash "$FACTORY_DIR/hooks/guard.test.sh"
+                        bash "$FACTORY_DIR/orchestrator.test.sh"
+                        bash "$FACTORY_DIR/orchestrator-notify.test.sh"
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
