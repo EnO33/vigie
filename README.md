@@ -30,6 +30,8 @@ docker/               image des agents
 1. Crée le dépôt GitHub et pousse ce code. Active Dependabot.
 2. Règle de branche sur `main` : status check requis `factory/gates`, pas de push direct,
    **contournement autorisé pour les administrateurs** (c'est ainsi que tu merges tes PR `board`).
+   Limite d'interaction `collaborators_only` sur le dépôt : sa durée maximale est de 6 mois,
+   **renouvelle-la tous les 6 mois** (prochaine échéance : 2027-05-26).
 3. Token GitHub fine-grained **de ton compte**, limité au dépôt (contents, issues, pull requests,
    commit statuses). Seul ton compte apparaîtra sur GitHub.
 4. `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`.

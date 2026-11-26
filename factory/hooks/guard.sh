@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Hook PreToolUse (agents de la factory uniquement, FACTORY_AGENT=1).
 # Exit 2 = action refusée, le message stderr est renvoyé à l'agent.
+#
+# Défense en profondeur, pas une frontière de sécurité : ce hook reconnaît les formes usuelles
+# des commandes interdites (gh, curl, wget). Il ne voit ni un script python ou node, ni une
+# commande encodée ou reconstruite à l'exécution, et ne cherche pas à les voir. Les vraies
+# barrières sont ailleurs : ruleset de main, gates objectifs, droits limités du token.
+# Tests : bash factory/hooks/guard.test.sh (lancés par l'étape « hooks » de factory/gates.sh).
 set -euo pipefail
 [ "${FACTORY_AGENT:-0}" = "1" ] || exit 0
 
@@ -37,9 +43,20 @@ case "$tool" in
     grep -qE 'push[^|;&]*(--force|-f( |$))' <<<"$cmd" && deny "pas de force-push"
     grep -qE -- '--no-verify' <<<"$cmd" && deny "pas de --no-verify"
     grep -qE 'core\.hooksPath' <<<"$cmd" && deny "les hooks Git du dépôt ne se désactivent pas"
-    grep -qE 'gh pr merge' <<<"$cmd" && deny "seul l'orchestrateur merge"
-    grep -qE 'gh pr review[^|;&]*--approve' <<<"$cmd" && deny "approbation via labels uniquement"
-    grep -qE 'gh (pr|issue) edit[^|;&]*--add-label[^|;&]*\bboard\b' <<<"$cmd" && deny "le label board est réservé au board"
+    grep -qE 'gh[[:space:]]+pr[[:space:]]+merge' <<<"$cmd" && deny "seul l'orchestrateur merge"
+    grep -qE 'gh[[:space:]]+pr[[:space:]]+review[^|;&]*--approve' <<<"$cmd" && deny "approbation via labels uniquement"
+    grep -qE 'gh[[:space:]]+(pr|issue)[[:space:]]+edit[^|;&]*--add-label[^|;&]*\bboard\b' <<<"$cmd" && deny "le label board est réservé au board"
+    # Endpoints du board et de l'orchestrateur : merge, statut des gates, règles du dépôt.
+    grep -qE 'gh[[:space:]]+api[^|;&]*/(merges?|statuses|rulesets|interaction-limits|branches/[^[:space:]]+/protection)([/?"'\''[:space:]]|$)' <<<"$cmd" \
+      && deny "endpoint réservé au board et à l'orchestrateur (merge, statuts, règles du dépôt)"
+    grep -qE '(^|[[:space:]])--admin([[:space:]=]|$)' <<<"$cmd" && deny "pas de --admin : aucun contournement des règles de branche"
+    # Mêmes opérations en GraphQL : merge, auto-merge, rulesets, protection de branche.
+    if grep -qE 'graphql' <<<"$cmd" \
+      && grep -qE '\b(mergePullRequest|mergeBranch|enablePullRequest(Auto|Agent)Merge|(create|update|delete)(RepositoryRuleset|BranchProtectionRule))\b' <<<"$cmd"; then
+      deny "mutation GraphQL réservée au board et à l'orchestrateur (merge, rulesets, protection)"
+    fi
+    # Appels directs à l'API GitHub : passer par gh, que ce hook sait lire.
+    grep -qE '\b(curl|wget)\b[^|;&]*api\.github\.com' <<<"$cmd" && deny "pas de curl/wget vers api.github.com : utilise gh"
     no_attribution "$cmd"
     ;;
   Edit|Write|MultiEdit|NotebookEdit)
