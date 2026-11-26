@@ -1,0 +1,6 @@
+/target
+/mutants.out*
+.env
+# Le .gitignore global du poste exclut .claude/ : ce dépôt le versionne.
+!.claude/
+.claude/settings.local.json

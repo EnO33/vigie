@@ -1,0 +1,20 @@
+// Réglages Zed du projet (PROTÉGÉ : board uniquement).
+{
+  "format_on_save": "on",
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        // Diagnostics de l'éditeur = lints stricts de la factory (clippy, workspace.lints).
+        "check": {
+          "command": "clippy",
+          "extraArgs": ["--all-targets", "--all-features"]
+        },
+        // Dossier target séparé : rust-analyzer ne bloque pas les tâches cargo.
+        "rust": {
+          "analyzerTargetDir": true
+        }
+      }
+    }
+  },
+  "file_scan_exclusions": ["**/.git", "**/target"]
+}

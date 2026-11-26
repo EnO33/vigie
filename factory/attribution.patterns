@@ -1,0 +1,8 @@
+co-authored-by:
+assisted-by:
+generated (with|by) .*\b(claude|ai|llm)\b
+claude[ -]?code
+noreply@anthropic\.com
+claude\.ai/code
+claude-session:
+🤖

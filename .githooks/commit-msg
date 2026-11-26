@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Refuse tout message de commit qui mentionne une attribution IA.
+# Seul le compte GitHub du board doit apparaître dans l'historique.
+set -euo pipefail
+if grep -qiE -f "$(git rev-parse --show-toplevel)/factory/attribution.patterns" "$1"; then
+  echo "commit refusé : attribution IA interdite (Co-Authored-By, Claude, Anthropic, Generated with...)." >&2
+  grep -niE -f "$(git rev-parse --show-toplevel)/factory/attribution.patterns" "$1" >&2
+  exit 1
+fi

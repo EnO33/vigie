@@ -1,0 +1,112 @@
+// Tâches Vigie (PROTÉGÉ : board uniquement). Lancer : palette « task: spawn » (Shift+Alt+T sous Windows).
+// Toutes passent par Git Bash, comme les scripts de la factory.
+// Les tâches « (Docker) » tournent dans l'image des agents : mêmes outils et versions que la factory,
+// et aucune toolchain C++ (MSVC) n'est nécessaire sur Windows.
+[
+  {
+    "label": "Vigie · gates complets (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh bash factory/gates.sh --local",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "allow_concurrent_runs": true
+  },
+  {
+    // cargo-mutants compile dans sa copie du dépôt : sans CARGO_TARGET_DIR, ses binaires mutés ne
+    // polluent pas le cache partagé vigie-target (sinon cargo réutilise un binaire muté plus récent).
+    "label": "Vigie · mutation complète (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh env -u CARGO_TARGET_DIR cargo mutants --workspace --exclude 'xtask/**' -o /workspace/target/mutants",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all"
+  },
+  {
+    "label": "Vigie · tests rapides (local)",
+    "command": "cargo test --workspace --all-features",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "Vigie · tests (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh cargo test --workspace --all-features",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "Vigie · test du crate courant (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh cargo test -p \"$ZED_CUSTOM_RUST_PACKAGE\"",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "Vigie · clippy strict (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "Vigie · format",
+    "command": "cargo fmt --all",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all",
+    "hide": "on_success"
+  },
+  {
+    "label": "Vigie · règles d'architecture (Docker)",
+    "command": "bash factory/bin/in-agent-image.sh cargo xtask arch",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "save": "all"
+  },
+  {
+    "label": "Vigie · construire l'image des agents",
+    "command": "docker compose build",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" }
+  },
+  {
+    "label": "Vigie · démarrer la factory",
+    "command": "test -f .env || { echo '.env absent : cp .env.example .env puis remplis-le (README)'; exit 1; }; docker compose up -d --build && docker compose logs -f --tail 50",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "use_new_terminal": true
+  },
+  {
+    "label": "Vigie · logs de la factory",
+    "command": "docker compose logs -f --tail 200",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "use_new_terminal": true
+  },
+  {
+    "label": "Vigie · arrêter la factory",
+    "command": "docker compose down",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" }
+  },
+  {
+    "label": "Vigie · mettre la factory en pause (factory:halt)",
+    "command": "gh issue create --title 'Pause de la factory' --label factory:halt --body 'Pause demandée par le board. Fermer cette issue pour reprendre.'",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" }
+  },
+  {
+    "label": "Vigie · reprendre la factory",
+    "command": "gh issue list --label factory:halt --state open --json number --jq '.[].number' | xargs -r -n1 gh issue close --comment 'Reprise par le board.'",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" }
+  },
+  {
+    "label": "Vigie · créer les labels GitHub",
+    "command": "bash factory/bin/setup-labels.sh",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" }
+  },
+  {
+    "label": "Vigie · Claude Code (board)",
+    "command": "claude",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "use_new_terminal": true,
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "Vigie · vérifier les versions (/check-versions)",
+    "command": "claude '/check-versions'",
+    "shell": { "program": "C:\\Program Files\\Git\\bin\\bash.exe" },
+    "use_new_terminal": true
+  }
+]

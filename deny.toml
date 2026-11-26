@@ -1,0 +1,40 @@
+# PROTÉGÉ (board uniquement). Supply chain : `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+  { crate = "anyhow", reason = "équivalent de `unknown` : erreurs typées thiserror (ADR-0002)" },
+  { crate = "eyre", reason = "équivalent de `unknown` : erreurs typées thiserror (ADR-0002)" },
+  { crate = "color-eyre", reason = "équivalent de `unknown` : erreurs typées thiserror (ADR-0002)" },
+  { crate = "openssl", reason = "préférer rustls (pur Rust, pas de dépendance système)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

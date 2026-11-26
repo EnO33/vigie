@@ -1,0 +1,5 @@
+# PROTÉGÉ. Flottant sur la dernière stable : la codebase suit Rust, pas la mémoire des agents.
+[toolchain]
+channel = "stable"
+profile = "minimal"
+components = ["clippy", "rustfmt", "llvm-tools-preview"]

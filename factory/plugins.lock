@@ -1,0 +1,12 @@
+# PROTÉGÉ (board). Plugins et skills Claude Code, épinglés par SHA de commit.
+# Règle de choix (skill check-versions) : dernière release stable publiée depuis >= 7 jours,
+# à défaut dernier commit de la branche par défaut vieux de >= 7 jours. Exception : correctif de sécurité.
+# Champs : dépôt  sha  cible  référence  date-de-la-référence  vérifié-le
+# cible = plugin@marketplace, ou skill:<chemin dans le dépôt> pour une skill sans plugin.
+DietrichGebert/ponytail          7801d061243d7b753bad0e0b3c057cd250b11755  ponytail@ponytail                 v5.3.3         2026-10-29  2026-11-26
+Nutlope/hallmark                 04977e15f3dfd6ee4b74c887dac3eb52665d6c92  hallmark@hallmark                 main           2026-11-11  2026-11-26
+affaan-m/ECC                     c05b2d6614f62f6db0047669aa4eefb223d478f9  ecc@ecc                           v2.2.3         2026-10-01  2026-11-26
+pbakaus/impeccable               b49177d32788f2dc585c42831d845dacf1ebed2c  impeccable@impeccable             skill-v4.10.0  2026-11-18  2026-11-26
+mattpocock/skills                d1478fcb140db0b93c0c8df17bcfd311844749d0  mattpocock-skills@mattpocock      v1.3.2         2026-10-29  2026-11-26
+JuliusBrussee/caveman            1e91f1306d602d4ca23618701b1185575ae1869b  caveman@caveman                   v4.1.0         2026-11-08  2026-11-26
+cloudflare/security-audit-skill  c1c8a8c1471069fb0e188eeaff69b8e8db6564a8  skill:skills/security-audit       main           2026-09-14  2026-11-26

@@ -1,0 +1,23 @@
+# PROTÉGÉ (board uniquement)
+
+# Un test qui échoue doit paniquer : tolérances limitées aux tests.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Équivalents de `unknown` et `try/catch`
+disallowed-types = [
+  { path = "std::any::Any", reason = "équivalent de `unknown` : utiliser un type concret" },
+  { path = "serde_json::Value", reason = "équivalent de `unknown` : désérialiser vers une struct typée", allow-invalid = true },
+  { path = "serde_json::Map", reason = "équivalent de `unknown` : désérialiser vers une struct typée", allow-invalid = true },
+  { path = "toml::Value", reason = "équivalent de `unknown` : désérialiser vers une struct typée", allow-invalid = true },
+  { path = "toml::Table", reason = "équivalent de `unknown` : désérialiser vers une struct typée", allow-invalid = true },
+]
+disallowed-methods = [
+  { path = "std::panic::catch_unwind", reason = "pas de try/catch : utiliser Result" },
+  { path = "std::panic::resume_unwind", reason = "pas d'exceptions" },
+  { path = "std::process::abort", reason = "utiliser une erreur typée remontée jusqu'à main" },
+  { path = "std::env::set_var", reason = "état global non synchronisé" },
+  { path = "std::env::remove_var", reason = "état global non synchronisé" },
+]

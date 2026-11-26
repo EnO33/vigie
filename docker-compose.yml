@@ -1,0 +1,18 @@
+services:
+  factory:
+    image: vigie-agent:dev
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    # Facultatif : build et gates fonctionnent sans .env ; l'entrypoint exige ses variables au démarrage.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - workspace:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+    restart: unless-stopped
+
+volumes:
+  workspace:
+  cargo-registry:
