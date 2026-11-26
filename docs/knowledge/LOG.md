@@ -2,6 +2,135 @@
 
 Faits vérifiés, datés, sourcés. Plus récent en haut.
 
+## 2026-11-26 — spike moteur : toolkits d'interface (chrome webview ou UI native Rust)
+
+Sources : `R` = `/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`. Versions et dates : `cargo info`
+et API `crates.io/api/v1/crates/<crate>/versions` (date `created_at`, champ `yanked`). Seuil des 7 jours :
+publiée au plus tard le 2026-11-19. Rien n'a été compilé ni exécuté : tout est lu.
+Référence wry : **0.57.3** (2026-11-18, 8 jours), comme demandé. `cargo info wry` donne aujourd'hui
+0.58.2 (publiée aujourd'hui, donc non éligible) ; 0.58.1 est yankée ; 0.58.0 date du 2026-11-25 (non yankée,
+MSRV 1.92 contre 1.85 en 0.57.x, API crates.io) ; 0.57.4 date du 2026-11-25. Non évalué ici.
+Licences admises (`deny.toml`, `[licenses] allow`) : MIT, Apache-2.0 (± LLVM-exception), BSD-2/3-Clause,
+ISC, MPL-2.0, Unicode-3.0, Zlib. Le critère MSRV ne vaut que pour le crate de tête (`rust-version` de
+son `Cargo.toml`) ; celui des dépendances transitives n'a pas été relevé.
+Choix des trois candidats : egui/eframe, iced, Slint. Non examinés : gtk4 (MIT, 0.11.5, MSRV 1.92 d'après
+`cargo info`), qui ajouterait GTK 4 à côté du GTK 3 imposé par wry sous Linux, Xilem, Dioxus-native, etc.
+
+### Option (B) — UI native Rust : trois candidats
+
+Contrainte wry (`R/wry-0.57.3/src/lib.rs` l. 1573) : `build_as_child<W: HasWindowHandle>(self, window: &'a W)`,
+`raw-window-handle` **0.6** avec `std` (`Cargo.toml` l. 149-151). Sous Linux (doc l. 1558-1566) : X11
+uniquement (panique hors X11 : voir l'entrée « 2026-11-26 — spike moteur : réglages réseau et modèle de
+processus », puce « Vues multiples ») ; `gtk::init` et `gtk::main_iteration_do` avec la boucle
+d'événements ; pas de redimensionnement automatique, appeler `WebView::set_bounds` (l. 1539, doc de `build`). Alternative Wayland+X11 citée par la doc : `build_gtk` avec `gtk::Fixed`.
+Le `W` est implicitement `Sized`, mais `impl<H: HasWindowHandle + ?Sized> HasWindowHandle for &H`
+(`R/raw-window-handle-0.6.2/src/borrowed.rs` l. 166) : `build_as_child(&w)` avec `w: &dyn Window` donne
+`W = &dyn Window`, qui est `Sized`. Aucun adaptateur n'est nécessaire (lu, pas compilé).
+
+| | eframe 0.37.0 | iced 0.14.0 | Slint 1.19.0 (1.19.1 non éligible) |
+|---|---|---|---|
+| Publiée | 2026-10-15 (42 j) | 2025-12-07 (354 j) | 1.19.0 : 2026-11-16 (10 j) ; 1.19.1 : 2026-11-24 (2 j), non éligible |
+| Licence | Tête : `MIT OR Apache-2.0`. Admise sans `default_fonts` (voir « Condition de licence ») | Tête : `MIT`. Licences transitives : **non vérifié** | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` (champ `license` crates.io de 1.19.0, identique en 1.19.1) : **éliminé (licence)** |
+| MSRV (crate de tête) | 1.95 | 1.88 | 1.95 (champ `rust_version` crates.io de 1.19.0) |
+| `raw-window-handle` | 0.6.2, `eframe-0.37.0/Cargo.toml` l. 169-170 | 0.6, `iced_runtime-0.14.0/Cargo.toml` l. 57-58 | 0.6 derrière la feature `raw-window-handle-06`, absente de `default` (`slint-1.19.1/Cargo.toml.orig` l. 95-97 ; 1.19.0 non lue) |
+| `HasWindowHandle` | **implémenté directement** : `impl HasWindowHandle for Frame` (`eframe-0.37.0/src/epi.rs` l. 750) et pour `CreationContext` (l. 101) | pas sur un type de l'application : `window::run(id, f: impl FnOnce(&dyn Window) -> T + Send + 'static)` (`iced_runtime-0.14.0/src/window.rs` l. 463-466), `trait Window: HasWindowHandle + HasDisplayHandle` (l. 196) | `slint::WindowHandle: HasWindowHandle` (`i-slint-core-1.19.1/api.rs` l. 412-419 ; 1.19.0 non lue) |
+| X11 | feature `x11` l. 113-121 de `eframe-0.37.0/Cargo.toml`, dans `default` (`cargo info`) | `x11` et `wayland` dans `default` (`cargo info`) | non examiné (éliminé) |
+| GTK initialisé | **non vérifié** (aucun code d'eframe ne touche GTK) | idem | non examiné |
+| Vue enfant CEF | **non examiné** (aucune lecture de `cef` pour ce critère) | non examiné | non examiné (éliminé) |
+| Exemple public avec vue web enfant | aucun : `emilk/egui/examples` (API GitHub) n'en contient pas : « non vérifié » | aucun dans `iced-rs/iced/examples` : « non vérifié » | aucun dans `slint-ui/slint/examples` : « non vérifié » |
+
+Faits liés :
+- Les exemples `wry-0.57.3/examples/winit.rs` (l. 22-24 `build_as_child(&window)`, l. 57-67 `gtk::main_iteration_do`,
+  l. 84 `gtk::init()`) et `multiwebview.rs` (l. 29-62 : quatre `build_as_child` dans une fenêtre) montrent le schéma
+  avec winit 0.30 (`wry` dev-dependency `winit = "0.30"`). `egui-winit-0.37.0` dépend de `winit` 0.30.13
+  (`Cargo.toml` l. 133-134), iced_winit 0.14.1 de `winit` 0.30 avec `rwh_06` (`Cargo.toml` l. 91-93). Même
+  famille de winit, mais **aucune combinaison toolkit + wry n'a été compilée** : non vérifié.
+- iced : `window::run` exige `Send + 'static` et renvoie le résultat par `Task<T>` avec `T: Send`. Un
+  `wry::WebView` enveloppe des objets GTK ; je n'ai pas prouvé par compilation qu'il est `!Send`
+  (aucun `unsafe impl Send` pour `WebView` dans `lib.rs`, seul `RequestAsyncResponder` l. 446 en a un). Si c'est
+  le cas, il faut le construire dans la closure et le ranger dans un `thread_local`. Non vérifié, mais c'est
+  un frottement que eframe n'a pas (`Frame` est utilisable directement, sans passer par une closure `Send`).
+  Ce repli suppose aussi que la closure de `window::run` tourne dans le thread où `gtk::init` a été appelé
+  (doc wry l. 1569-1572) : **non vérifié : thread d'exécution de `window::run` dans `iced_winit`.**
+- Wayland : `build_as_child` n'y fonctionne pas (doc l. 1558-1559). eframe et iced activent Wayland par défaut
+  (eframe : `default` l. 61-72 de `Cargo.toml`, qui contient `wayland` **et** `winit/default`, dont le
+  `default` active `wayland` : `winit-0.30.13/Cargo.toml` l. 73-79 ; iced : `default`) ; Slint non examiné.
+  Désactiver la feature `wayland` n'empêche donc pas Wayland : GDK choisit son backend seul, et wry
+  panique (`webkitgtk/mod.rs` l. 158, `downcast_ref::<X11Display>().unwrap()`). Pistes, **toutes non
+  vérifiées** : côté eframe, `NativeOptions::event_loop_builder` (`eframe-0.37.0/src/epi.rs` l. 354) avec
+  `EventLoopBuilderExtX11::with_x11` (`winit-0.30.13/src/platform/x11.rs` l. 116) ; côté GDK, forcer le
+  backend X11 avant `gtk::init` (ex. `GDK_BACKEND=x11`).
+- Exemple wry `winit.rs` l. 84-91 : après `gtk::init()`, il vérifie `is_wayland()` puis appelle
+  `winit::platform::x11::register_xlib_error_hook` pour ignorer le code d'erreur X 170. Le prototype
+  eframe doit trancher s'il en a besoin : non vérifié.
+
+### Option (A) — chrome en webview : isolation interface / page
+
+API wry 0.57.3 (`src/lib.rs`) :
+- `with_ipc_handler` (l. 1177) : réception des messages `window.ipc.postMessage(..)`. Sous Linux, le canal
+  JS n'existe que si le handler est fourni : `src/webkitgtk/mod.rs` l. 314-316 (`ipc_enabled = ipc_handler.is_some()`,
+  `attach_ipc_handler` seulement si `Some`), l. 731-758, `register_script_message_handler("ipc")` l. 757 ; l. 351-352 : `window.ipc` n'est injecté
+  (`w.init(..)`) que si `ipc_enabled`, c'est la preuve de l'absence de pont sans handler).
+  Donc : **seule la vue d'interface reçoit `with_ipc_handler`** ; les vues de page sont construites sans
+  (`ipc_handler: None` par défaut, l. 865) et n'ont pas ce pont sous WebKitGTK. Vérifié pour WebKitGTK ;
+  WebView2 et WKWebView : non lus.
+- Événements des pages sans JS : callbacks Rust posés sur chaque vue de page, `with_navigation_handler`
+  (l. 1309, `Fn(String) -> bool`, peut refuser ; voir le schéma plus bas pour la vue d'interface), `with_on_page_load_handler` (l. 1448),
+  `with_document_title_changed_handler` (l. 1426), `with_new_window_req_handler` (l. 1407),
+  `with_download_started_handler` (l. 1362). Ils s'exécutent côté Rust, dans le processus hôte.
+- Rust vers interface : `WebView::evaluate_script` (l. 2103) sur la **vue d'interface uniquement**.
+  Pas de `with_initialization_script` (l. 1011) sur les vues de page : la page n'a aucun script injecté.
+- Chargement de l'interface : `with_custom_protocol` (l. 1076) sert le HTML/CSS local ; pas d'URL distante.
+- Schéma : page → (callbacks Rust) → état de l'application → `evaluate_script` → vue d'interface ;
+  interface → `ipc_handler` → commandes typées Rust (valider chaque message : donnée non fiable) → actions
+  sur les `WebView` de page (`load_url`, `set_bounds`). La page ne voit jamais `window.ipc` tant que les
+  conditions ci-dessous tiennent.
+- Même limite Linux que (B) (voir plus haut).
+
+Conditions d'isolation (vue d'interface) :
+1. **Navigation** : `window.ipc` est injecté par `init(.., true)` (`mod.rs` l. 351-352), soit
+   `UserContentInjectedFrames::TopFrame` (l. 832-833) : seulement les documents de premier niveau de cette vue.
+   Un lien ou une redirection suivi donnerait le pont à un document distant. La vue d'interface reçoit donc un
+   `with_navigation_handler` (l. 1309) qui refuse tout ce qui n'est pas son schéma custom.
+2. **Origine IPC** : la `Request` porte `webview.uri()` (`mod.rs` l. 745), l'URI de premier niveau **de la
+   vue**, pas celle du frame émetteur. Le contrôle d'origine du handler ne protège donc que ce que (1) couvre
+   déjà. Le handler `ipc` est enregistré sur le `UserContentManager` (l. 757), pas sur un frame.
+3. **Aucune iframe** dans l'interface (par ex. CSP `frame-src 'none'`, non vérifié) : un sous-frame distant
+   appelant `window.webkit.messageHandlers.ipc.postMessage` directement passerait le contrôle (2).
+   **Non vérifié : accès d'un sous-frame à `window.webkit.messageHandlers.ipc` sous WebKitGTK.**
+4. **`WebContext` propre** : `with_custom_protocol` s'enregistre sur le **`WebContext`**, pas sur la vue
+   (`webkitgtk/mod.rs` l. 381 `web_context.register_uri_scheme` ; `webkitgtk/web_context.rs` l. 130-144
+   `register_uri_scheme_as_secure`). Sans `new_with_web_context`, chaque vue reçoit un contexte neuf
+   (`mod.rs` l. 263-268). La vue d'interface doit avoir son propre `WebContext`, jamais partagé avec les
+   pages, sinon une page peut demander le schéma de l'interface (atteignabilité réelle : non vérifiée).
+
+Non vérifié : qu'un script de page ne puisse pas atteindre la vue d'interface (vues distinctes, donc pas de
+partage d'origine attendu ; non testé).
+
+### Recommandation
+
+Prototyper **(B) avec eframe 0.37.0**. Raisons vérifiées : seul candidat à la fois éligible (MSRV 1.95 ≤ 1.100, release de 42 jours, la plus récente des deux éligibles) et dont `Frame` implémente
+`HasWindowHandle` (`epi.rs` l. 750) : `build_as_child(&frame)` passe sans adaptateur (lu, pas compilé). iced est éligible mais
+sans release du crate `iced` depuis 354 jours (`iced_winit` 0.14.1 : 2026-09-13) et sans type portant le handle (closure `Send`). Slint est éliminé (licence).
+**Condition de licence** : `default` d'eframe (`Cargo.toml` l. 61-72) contient `default_fonts` → `egui/default_fonts`
+(`egui-0.37.0/Cargo.toml` l. 63) → `epaint_default_fonts` (`epaint-0.37.0/Cargo.toml` l. 64), de licence
+`(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` (`epaint_default_fonts-0.37.0/Cargo.toml` l. 46).
+OFL-1.1 et Ubuntu-font-1.0 ne sont pas dans `deny.toml` `allow`, sans exception : `cargo deny` les refuse.
+Deux voies : (a) issue `type:chore` `area:factory` au board pour élargir `deny.toml` ; (b) `default-features = false`,
+qui retire aussi `wgpu`, `x11`, `winit/default` et `system_fonts` : réactiver `x11`, `wgpu` ou `glow`
+(`NativeOptions::event_loop_builder` et `create_native` n'existent que sous
+`cfg(any(feature = "glow", feature = "wgpu_no_default_features"))`, `epi.rs` l. 353-354, `lib.rs` l. 375-376),
+et une source de police : `system_fonts` (`Cargo.toml` l. 92), ou une police embarquée sous une licence de `allow`.
+Sans police, `MissingGlyphPolicy` vaut `Tofu` par défaut (`epaint-0.37.0/src/text/fonts.rs` l. 57-61) et eframe
+installe `MissingSystemFontsWarning` (`src/native/epi_integration.rs` l. 151-165, 262-263). Licences transitives
+de ces features : **non vérifié**. `deny.toml` a `[graph] all-features = true` : la condition doit valoir pour
+toutes les features du workspace, aucune ne doit transmettre `eframe/default` ni `default_fonts`.
+Le prototype doit trancher les points non vérifiés : X11 forcé sous une session Wayland, `gtk::init` +
+`main_iteration_do` depuis la boucle eframe (essayer aussi `eframe::create_native`, `eframe-0.37.0/src/lib.rs`
+l. 376, avec sa propre boucle winit comme l'exemple wry ; sinon `main_iteration_do` dans `ui()` n'est pas appelé
+quand la fenêtre est au repos : non vérifié), `set_bounds` à chaque redimensionnement, entrée clavier entre
+vue web enfant et egui. S'il échoue, repli : (A), dont l'isolation est décrite ci-dessus.
+
 ## 2026-11-26 — spike moteur : réglages réseau et modèle de processus (wry 0.57.3, cef 156.7.0)
 
 Sources : `R` = `$CARGO_HOME/registry/src/index.crates.io-1949cf8c6b5b557f/` (ici
