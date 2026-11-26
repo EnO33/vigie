@@ -26,8 +26,15 @@ re-vérifier avec `pkg-config`.
   aux défauts WebKit. Piste : construire sans `with_url`/`with_html`, poser les réglages via
   `webview()`, puis `load_url`. Ordre effectif : **non mesuré.**
 - Ce que wry fait déjà (`src/webkitgtk/mod.rs`) : contexte éphémère si `with_incognito(true)`
-  (l. 259-260, `WebContext::new_ephemeral()`), proxy via `WebsiteDataManager` (l. 278-281),
-  `Settings` : webgl, webaudio, page cache, user agent, devtools, JS (l. 439-465). **Aucun** réglage de
+  (l. 259-260, `WebContext::new_ephemeral()`), proxy via `WebsiteDataManager` (l. 271-282),
+  `Settings` : webgl, webaudio, page cache, user agent, devtools, JS, `set_enable_back_forward_navigation_gestures`
+  (l. 443-444) et, si `attributes.clipboard`, `set_javascript_can_access_clipboard(true)` (l. 447-449)
+  (l. 439-465 au total ; l'accès presse-papiers depuis JS touche Q5).
+  Piège : avec `with_incognito(true)`, le `WebContext` fourni est **ignoré sans erreur** (`mod.rs` l. 259-263 ;
+  doc `lib.rs` l. 1434 « WebContext will be ignored if incognito is enabled »).
+  Piège : une vue `with_related_view` n'appelle pas `builder.web_context(…)` (l. 419-423) : elle hérite du
+  contexte de la vue d'origine, donc n'a ni le contexte éphémère de `with_incognito` ni le proxy, posé sur le
+  `WebsiteDataManager` de ce contexte (l. 271-282). Compte pour « rien sur disque » et pour `PageEngine`. **Aucun** réglage de
   préchargement DNS, d'audit de liens, de TLS ni de rapports n'est posé : les défauts WebKit s'appliquent.
 - Réglages réseau existants côté `webkit2gtk-2.0.2` :
   - `SettingsExt::set_enable_dns_prefetching` (`src/auto/settings.rs` l. 1485). Doc 2.42.5 (non vérifié pour 2.38) :
@@ -35,10 +42,14 @@ re-vérifier avec `pkg-config`.
   - `SettingsExt::set_enable_hyperlink_auditing` (l. 1549). Doc 2.42.5 (non vérifié pour 2.38) : « hyperlink auditing is enabled ».
     Défaut : non vérifié.
   - `WebContextExt::set_tls_errors_policy` (`src/auto/web_context.rs` l. 688) : **déprécié depuis 2.32**
-    (doc 2.42.5, `class.WebContext.html`, non vérifié pour 2.38 ; la source wry porte aussi `deprecated = "Since 2.32"`, `web_context.rs` l. 685) ; `WebsiteDataManagerExt::set_tls_errors_policy`
+    (doc 2.42.5, `class.WebContext.html`, non vérifié pour 2.38 ; la source webkit2gtk porte aussi
+    `#[cfg_attr(feature = "v2_32", deprecated = "Since 2.32")]`, `webkit2gtk-2.0.2/src/auto/web_context.rs`
+    l. 684, `fn set_tls_errors_policy` l. 687) ; `WebsiteDataManagerExt::set_tls_errors_policy`
     (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616).
-  - `WebsiteDataManager` : `is_ephemeral` (l. 566, rien d'écrit sur disque), `set_itp_enabled` (l. 577),
-    `set_network_proxy_settings` (l. 589).
+  - `WebsiteDataManager` (`website_data_manager.rs`) : `is_ephemeral` l. 566 est un **getter** en lecture
+    seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Pour régler : `WebsiteDataManager::new_ephemeral()`
+    (l. 43) ou la propriété du builder `is_ephemeral(self, bool)` (l. 157) ; côté wry, `WebContext::new_ephemeral()`
+    (`src/webkitgtk/web_context.rs` l. 54). Aussi `set_itp_enabled` (l. 577), `set_network_proxy_settings` (l. 589).
 - Prefetch de ressources (`<link rel=prefetch>`) : aucun réglage trouvé. **Non vérifié.**
 - Vérification de certificats en ligne (OCSP/CRL) et rapports/télémétrie : aucun réglage trouvé dans la
   source lue ; le comportement vient de libsoup/GnuTLS, hors des crates lus. **Non vérifié.**
@@ -79,6 +90,12 @@ re-vérifier avec `pkg-config`.
   in root_cache_path ». Doc de `root_cache_path` (l. 17813) : si les deux sont vides, répertoire par
   défaut `~/.config/cef_user_data` sous Linux ; verrou singleton basé sur cette valeur depuis CEF 120.
   Donc « rien sur disque » n'est pas acquis : des données d'installation restent écrites.
+- Préférences et policies : `cef::Settings.chrome_policy_id` (`cef` l. 584 ; doc C `cef-dll-sys-…` l. 17846 :
+  active les policies Chrome via la plateforme/l'utilisateur OS, par ex. `/etc/opt/chrome/policies` sous
+  Linux, « Only supported with Chrome style »). Préférences à l'exécution : `ImplPreferenceManager`
+  (`has_preference`, `can_set_preference`, `set_preference`, l. 10822-10830 des bindings `cef`). Noms de
+  préférences ou de policies utiles (mises à jour, télémétrie, Safe Browsing) : **non vérifié**, aucune
+  liste lue ; la doc C de `set_preference` n'a pas été lue non plus.
 - Noms de switches Chromium (mises à jour de composants, Safe Browsing, rapports de crash, domain
   reliability, préchargement, variations) : **non vérifié.** Ils ne figurent pas dans les crates `cef`
   (recherche de `disable-component-update`, `disable-background-networking`, `no-pings`,
@@ -142,6 +159,7 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 ### Non vérifié (récapitulatif)
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
+préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
 sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
