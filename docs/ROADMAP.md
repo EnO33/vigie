@@ -5,7 +5,7 @@
 
 ## M1 — Coquille
 
-1. **Spike moteur et toolkit UI** : comparer WebView2/wry, CEF (crate `cef`) et le toolkit de
+1. **Spike moteur et toolkit UI** ([#11](https://github.com/EnO33/vigie/issues/11)) : comparer WebView2/wry, CEF (crate `cef`) et le toolkit de
    l'interface (webview chrome vs UI native). Livrable : ADR-0004 avec prototype jetable mesuré
    (démarrage, mémoire, multi-webview, contrôle de la télémétrie du moteur).
 2. **Port `PageEngine` + adaptateur retenu** : ouvrir une page, naviguer, événements titre/URL.
