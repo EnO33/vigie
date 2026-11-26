@@ -2,16 +2,20 @@
 # Gates objectifs de la factory : ce qui remplace la revue humaine.
 #   factory/gates.sh --local     vérifie le working tree courant (agents avant push, ou le board)
 #   factory/gates.sh --pr <N>    vérifie la PR N dans un worktree, publie le commit status factory/gates
+#   factory/gates.sh --checks    (interne) contrôles de --pr, dans le répertoire courant
 #
 # Les PR du board (label `board`) ne passent jamais par ici : la factory les ignore et le board
 # les merge lui-même. Une PR qui touche un fichier protégé est donc toujours refusée.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
+# Chemin absolu de ce script, résolu avant tout cd : en mode --pr, le processus enfant doit être
+# ce gates.sh (celui de main), jamais la copie du worktree de la PR.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 BASE_REF="${BASE_REF:-origin/main}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
 PROTECTED_RE='^(VISION\.md|CLAUDE\.md|docs/(factory|engineering)/|clippy\.toml|deny\.toml|rustfmt\.toml|rust-toolchain\.toml|\.claude/|\.zed/|\.githooks/|\.github/|docker/|docker-compose\.yml|factory/|xtask/|\.cargo/)'
-PATTERNS="$ROOT/factory/attribution.patterns"
+PATTERNS="${GATES_PATTERNS:-$ROOT/factory/attribution.patterns}"
 
 step() { printf '\n▶ %s\n' "$*"; }
 has_base() { git rev-parse --verify --quiet "$BASE_REF" >/dev/null; }
@@ -59,7 +63,10 @@ run_mutants_on_diff() {
 }
 
 run_gates() {
+  step "modes";         bash factory/check-modes.test.sh
+                        bash factory/check-modes.sh
   step "hooks";         bash factory/hooks/guard.test.sh
+                        bash factory/orchestrator.test.sh
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
@@ -86,6 +93,13 @@ case "${1:-}" in
     run_gates
     echo; echo "✓ gates verts"
     ;;
+  --checks)
+    # Processus enfant lancé par --pr : ici, set -e s'applique à chaque étape. Dans la condition
+    # d'un if, bash ignore set -e (même dans un sous-shell) : une étape rouge passerait inaperçue.
+    check_integrity
+    check_attribution "${GATES_PR_TEXT:-}"
+    run_gates
+    ;;
   --pr)
     pr="${2:?numéro de PR requis}"
     cd "$ROOT"
@@ -97,7 +111,7 @@ case "${1:-}" in
     sha="$(git rev-parse HEAD)"
     pr_text="$(gh pr view "$pr" --json title,body --jq '.title + "\n" + .body')"
     post_status "$sha" pending "gates en cours"
-    if check_integrity && check_attribution "$pr_text" && run_gates; then
+    if GATES_PR_TEXT="$pr_text" GATES_PATTERNS="$PATTERNS" bash "$SELF" --checks; then
       post_status "$sha" success "tous les gates sont verts"
       echo "✓ gates verts sur $sha"
     else

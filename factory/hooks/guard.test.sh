@@ -72,6 +72,16 @@ expect_deny 'gh  pr merge 12 --squash'
 expect_deny 'gh pr  review 12  --approve'
 expect_deny 'gh  issue  edit 3 --add-label  board'
 
+# Label board à la création (gh issue/pr create, --label ou -l, seul ou dans une liste)
+expect_deny 'gh issue create --title "x" --body "y" --label board'
+expect_deny 'gh  issue  create --title x --label  board'
+expect_deny 'gh pr create --title x --label=board'
+expect_deny 'gh  pr  create -t x -l  board'
+expect_deny 'gh issue create -t x -l "type:chore,board"'
+expect_deny "gh pr create -t x --label 'area:factory, board'"
+expect_deny 'gh issue create -t x --label type:chore --label board --body y'
+expect_deny 'gh issue create -t x -l type:chore,board,prio:p2'
+
 # Témoins : ce qui doit rester permis
 expect_allow 'gh api repos/{owner}/{repo}/issues/12 --jq .id'
 expect_allow 'gh api -X POST repos/{owner}/{repo}/issues/3/sub_issues -F sub_issue_id=42'
@@ -80,6 +90,8 @@ expect_allow 'gh pr view 12 --json mergeable,mergeStateStatus'
 expect_allow 'grep -rn "statuses" factory/'
 expect_allow "gh api graphql -f query='{ repository(owner: \"EnO33\", name: \"vigie\") { pullRequest(number: 12) { mergeable } } }'"
 expect_allow 'grep -rn mergePullRequest factory/'
+expect_allow 'gh issue create --title "Question pour le board" --label type:chore --body "à trancher par le board"'
+expect_allow 'gh pr create -t x -l area:factory,board-notes'
 expect_allow "curl -fsSL https://crates.io/api/v1/crates/serde/versions | jq -r '.versions[0].num'"
 # Hors agent de la factory (session du board), le hook ne bloque rien.
 expect_allow 'gh api -X PUT repos/{owner}/{repo}/pulls/12/merge' 0

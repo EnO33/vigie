@@ -61,16 +61,24 @@ first_untriaged_dependabot_pr() {
     --jq '[.[] | select(([.labels[].name] | index("review:approved")) | not)][0].number // empty'
 }
 
-count_issues() {
-  gh issue list --repo "$REPO" --state open --label "$1" --label "$2" --json number --jq 'length'
+# Travail pris par le développeur : stories, chores (dependency-steward, veille) et bugs
+# (security-auditor). gh combine les --label en ET : le type se filtre donc en jq.
+WORK_TYPES='select([.labels[].name] | any(. == "type:story" or . == "type:chore" or . == "type:bug"))'
+
+# Travail en cours, compté contre WIP_LIMIT (hors issues du board).
+wip_count() {
+  gh issue list --repo "$REPO" --state open --label status:in-progress \
+    --json number,labels --limit 100 \
+    --jq "[.[] | $NOT_BOARD | $WORK_TYPES] | length"
 }
 
-# story prête la plus prioritaire (p0 < p1 < p2)
+# Issue prête (story, chore ou bug) la plus prioritaire : p0 < p1 < p2 < sans prio, puis numéro.
 next_ready_story() {
-  gh issue list --repo "$REPO" --state open --label type:story --label status:ready \
+  gh issue list --repo "$REPO" --state open --label status:ready \
     --json number,labels --limit 100 \
-    --jq '[.[] | {n: .number, p: ([.labels[].name | select(startswith("prio:"))][0] // "prio:p9")}]
-          | sort_by(.p, .n) | .[0].n // empty'
+    --jq "[.[] | $NOT_BOARD | $WORK_TYPES
+           | {n: .number, p: ([.labels[].name | select(startswith(\"prio:\"))][0] // \"prio:p9\")}]
+          | sort_by(.p, .n) | .[0].n // empty"
 }
 
 epics_with_status() {
@@ -96,7 +104,7 @@ merge_if_green() {
   local pr="$1" head title closes
   head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)"
   log "gates sur PR #$pr ($head)"
-  if (cd "$WORKDIR" && factory/gates.sh --pr "$pr") >"$LOG_DIR/gates-pr$pr.log" 2>&1; then
+  if (cd "$WORKDIR" && bash factory/gates.sh --pr "$pr") >"$LOG_DIR/gates-pr$pr.log" 2>&1; then
     # Squash au nom du board, message maîtrisé (pas de Co-authored-by généré par GitHub),
     # et uniquement si la tête de PR est celle que les gates ont validée.
     title="$(gh pr view "$pr" --repo "$REPO" --json title --jq .title)"
@@ -169,7 +177,7 @@ tick() {
   n="$(first_untriaged_dependabot_pr)"
   if [ -n "$n" ]; then run_agent dependency-steward "Mission : traiter la PR Dependabot #$n."; return; fi
 
-  if [ "$(count_issues type:story status:in-progress)" -lt "$WIP_LIMIT" ]; then
+  if [ "$(wip_count)" -lt "$WIP_LIMIT" ]; then
     n="$(next_ready_story)"
     if [ -n "$n" ]; then run_agent developer "Mission : implémenter l'issue #$n."; return; fi
   fi
@@ -202,4 +210,7 @@ main() {
   done
 }
 
-main "$@"
+# Sourcé (factory/orchestrator.test.sh) : définit les fonctions sans lancer la boucle.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

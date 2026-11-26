@@ -8,6 +8,13 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # GateGuard d'ECC bloque la première édition et la première commande Bash de chaque
+      # session tant que l'agent n'a pas « présenté des faits ». La règle n°1 de CLAUDE.md
+      # (vérifier à la source avant de conclure) couvre déjà ce besoin : on désactive ce seul
+      # hook. Interrupteur documenté dans hooks/README.md d'ECC au SHA épinglé c05b2d6 ;
+      # il ne touche ni le dispatcher Bash ni la protection de configuration d'ECC.
+      ECC_GATEGUARD: "off"
     volumes:
       - workspace:/workspace
       - cargo-registry:/usr/local/cargo/registry
