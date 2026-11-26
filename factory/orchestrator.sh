@@ -87,10 +87,25 @@ first_fully_approved_pr() {
     --jq "[.[] | $NOT_BOARD | select(([.labels[].name] | index(\"review:approved\")) and ([.labels[].name] | index(\"security:approved\")))][0].number // empty"
 }
 
-first_untriaged_dependabot_pr() {
-  gh pr list --repo "$REPO" --state open --author app/dependabot --json number,labels \
-    --jq '[.[] | select(([.labels[].name] | index("review:approved")) | not)][0].number // empty'
+# PR Dependabot à trier (« <numéro> <tête> ») : non approuvée, et que le steward n'a pas déjà vue
+# aujourd'hui (UTC) sur la même tête. Un refus (version trop récente…) devient une revérification
+# quotidienne, ou à la prochaine mise à jour de la PR par Dependabot, au lieu d'une boucle.
+next_dependabot_pr() {
+  local today n head
+  today="$(date -u +%F)"
+  while read -r n head; do
+    head="${head%$'\r'}"  # jq sous Windows termine ses lignes par CRLF
+    [ -n "$n" ] || continue
+    if [ "$(cat "$STATE_DIR/steward-pr$n" 2>/dev/null)" != "$head $today" ]; then
+      echo "$n $head"
+      return 0
+    fi
+  done < <(gh pr list --repo "$REPO" --state open --author app/dependabot \
+    --json number,labels,headRefOid \
+    --jq '.[] | select(([.labels[].name] | index("review:approved")) | not) | "\(.number) \(.headRefOid)"')
 }
+
+mark_steward_seen() { echo "$2 $(date -u +%F)" >"$STATE_DIR/steward-pr$1"; }
 
 # Travail pris par le développeur : stories, chores (dependency-steward, veille) et bugs
 # (security-auditor). gh combine les --label en ET : le type se filtre donc en jq.
@@ -266,8 +281,12 @@ tick() {
   n="$(first_fully_approved_pr)"
   if [ -n "$n" ]; then merge_if_green "$n"; return; fi
 
-  n="$(first_untriaged_dependabot_pr)"
-  if [ -n "$n" ]; then run_agent dependency-steward "Mission : traiter la PR Dependabot #$n."; return; fi
+  local head=""
+  read -r n head <<<"$(next_dependabot_pr)" || true
+  if [ -n "$n" ]; then
+    mark_steward_seen "$n" "$head"
+    run_agent dependency-steward "Mission : traiter la PR Dependabot #$n."; return
+  fi
 
   if [ "$(wip_count)" -lt "$WIP_LIMIT" ]; then
     n="$(next_ready_story)"

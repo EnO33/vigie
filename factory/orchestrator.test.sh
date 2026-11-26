@@ -72,6 +72,23 @@ expect_eq "ordre (bug p0, stories p1 par numéro, chore p2, sans prio ; ni epic 
 
 expect_eq "WIP : en cours de type story/chore/bug, hors epic et board" "1" "$(wip_count)"
 
+# PR Dependabot : le steward ne repasse sur une même tête qu'une fois par jour UTC.
+pr() { jq -n --argjson n "$1" --arg h "$2" '{number: $n, headRefOid: $h, labels: [$ARGS.positional[] | {name: .}]}' --args "${@:3}"; }
+{ pr 22 aaa type:chore; pr 23 ccc type:chore review:approved security:approved; } | jq -s . >"$GH_FIXTURE"
+triage_tick() {  # même enchaînement que tick() : choisir, marquer, (lancer le steward)
+  local n head
+  read -r n head <<<"$(next_dependabot_pr)" || true
+  [ -z "$n" ] || mark_steward_seen "$n" "$head"
+  echo "$n"
+}
+runs="$(triage_tick) $(triage_tick) $(triage_tick)"
+expect_eq "même tête, même jour : un seul passage en trois ticks (PR approuvée ignorée)" "22" "$(echo $runs)"
+{ pr 22 bbb type:chore; pr 23 ccc type:chore review:approved security:approved; } | jq -s . >"$GH_FIXTURE"
+expect_eq "Dependabot met la PR à jour : nouveau passage" "22" "$(triage_tick)"
+expect_eq "puis plus rien le même jour" "" "$(triage_tick)"
+echo "bbb 2000-01-01" >"$STATE_DIR/steward-pr22"
+expect_eq "jour suivant, même tête : revérification" "22" "$(triage_tick)"
+
 echo
 if [ "$failures" -eq 0 ]; then echo "✓ orchestrator.sh : tous les tests passent"
 else echo "✗ orchestrator.sh : $failures échec(s)"; exit 1; fi
