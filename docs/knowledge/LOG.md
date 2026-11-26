@@ -19,7 +19,7 @@ re-vérifier avec `pkg-config`.
 
 ### Q1 — WebKitGTK (Linux)
 - Accès au `WebView` WebKitGTK : `WebViewExtUnix::webview()` → `webkit2gtk::WebView`
-  (`R/wry-0.57.3/src/lib.rs` l. 2430 trait, l. 2447 impl). Tout réglage ci-dessous passe donc par là,
+  (`R/wry-0.57.3/src/lib.rs` : trait `WebViewExtUnix` l. 2414, `fn webview` l. 2430, impl l. 2447). Tout réglage ci-dessous passe donc par là,
   après `build_gtk`/`build_as_child`. `WebViewBuilder` n'expose aucun de ces réglages.
   Mais le build charge déjà la page : `src/webkitgtk/mod.rs` l. 385-389 (`web_context.load_uri(…)` si
   `attributes.url`, sinon `load_html`). Des réglages posés après le build laissent donc la première page
@@ -32,9 +32,13 @@ re-vérifier avec `pkg-config`.
   (l. 439-465 au total ; l'accès presse-papiers depuis JS touche Q5).
   Piège : avec `with_incognito(true)`, le `WebContext` fourni est **ignoré sans erreur** (`mod.rs` l. 259-263 ;
   doc `lib.rs` l. 1434 « WebContext will be ignored if incognito is enabled »).
-  Piège : une vue `with_related_view` n'appelle pas `builder.web_context(…)` (l. 419-423) : elle hérite du
-  contexte de la vue d'origine, donc n'a ni le contexte éphémère de `with_incognito` ni le proxy, posé sur le
-  `WebsiteDataManager` de ce contexte (l. 271-282). Compte pour « rien sur disque » et pour `PageEngine`. **Aucun** réglage de
+  Piège : une vue `with_related_view` n'appelle pas `builder.web_context(…)` (l. 419-423). Le
+  `with_incognito` et le `with_proxy_config` de cette vue sont posés sur un contexte qui n'est pas utilisé
+  (l. 259-282 puis l. 419-420) : ils sont perdus sans erreur. Ce dont la vue liée hérite vient de WebKitGTK,
+  doc non lue : **non vérifié.** Compte pour « rien sur disque » et pour `PageEngine`.
+  Sans `with_web_context` ni `with_incognito`, wry prend `WebContext::default()` = `Self::new(None)`
+  (`R/wry-0.57.3/src/web_context.rs` l. 97-98) : aucun `WebsiteDataManager` n'est créé
+  (`src/webkitgtk/web_context.rs` l. 32-50). Persistance par défaut de WebKit : **non vérifié.** **Aucun** réglage de
   préchargement DNS, d'audit de liens, de TLS ni de rapports n'est posé : les défauts WebKit s'appliquent.
 - Réglages réseau existants côté `webkit2gtk-2.0.2` :
   - `SettingsExt::set_enable_dns_prefetching` (`src/auto/settings.rs` l. 1485). Doc 2.42.5 (non vérifié pour 2.38) :
@@ -44,7 +48,7 @@ re-vérifier avec `pkg-config`.
   - `WebContextExt::set_tls_errors_policy` (`src/auto/web_context.rs` l. 688) : **déprécié depuis 2.32**
     (doc 2.42.5, `class.WebContext.html`, non vérifié pour 2.38 ; la source webkit2gtk porte aussi
     `#[cfg_attr(feature = "v2_32", deprecated = "Since 2.32")]`, `webkit2gtk-2.0.2/src/auto/web_context.rs`
-    l. 684, `fn set_tls_errors_policy` l. 687) ; `WebsiteDataManagerExt::set_tls_errors_policy`
+    l. 685, `fn set_tls_errors_policy` l. 688) ; `WebsiteDataManagerExt::set_tls_errors_policy`
     (`website_data_manager.rs` l. 618) à préférer. Valeurs : `Ignore`/`Fail` (`enums.rs` l. 3616).
   - `WebsiteDataManager` (`website_data_manager.rs`) : `is_ephemeral` l. 566 est un **getter** en lecture
     seule (`fn is_ephemeral(&self) -> bool`), pas un interrupteur. Pour régler : `WebsiteDataManager::new_ephemeral()`
@@ -85,12 +89,12 @@ re-vérifier avec `pkg-config`.
 - `Settings` (`cef::Settings`, `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 556-589 ;
   équivalent C `_cef_settings_t`, `cef-dll-sys-…/x86_64_unknown_linux_gnu.rs` l. 17791) : `no_sandbox`, `cache_path`, `root_cache_path`,
   `persist_session_cookies`, `command_line_args_disabled`, `accept_language_list`, `disable_signal_handlers`.
-  Doc C de `cache_path` (`cef-dll-sys-…` l. 17811) : vide → « incognito mode », caches en mémoire,
+  Doc C de `cache_path` (`cef-dll-sys-…` doc l. 17810, champ l. 17811) : vide → « incognito mode », caches en mémoire,
   rien de spécifique au profil sur disque, **mais** « installation-specific data will still be persisted
-  in root_cache_path ». Doc de `root_cache_path` (l. 17813) : si les deux sont vides, répertoire par
+  in root_cache_path ». Doc de `root_cache_path` (doc l. 17812, champ l. 17813) : si les deux sont vides, répertoire par
   défaut `~/.config/cef_user_data` sous Linux ; verrou singleton basé sur cette valeur depuis CEF 120.
   Donc « rien sur disque » n'est pas acquis : des données d'installation restent écrites.
-- Préférences et policies : `cef::Settings.chrome_policy_id` (`cef` l. 584 ; doc C `cef-dll-sys-…` l. 17846 :
+- Préférences et policies : `cef::Settings.chrome_policy_id` (`cef` l. 584 ; doc C `cef-dll-sys-…` doc l. 17845, champ l. 17846 :
   active les policies Chrome via la plateforme/l'utilisateur OS, par ex. `/etc/opt/chrome/policies` sous
   Linux, « Only supported with Chrome style »). Préférences à l'exécution : `ImplPreferenceManager`
   (`has_preference`, `can_set_preference`, `set_preference`, l. 10822-10830 des bindings `cef`). Noms de
@@ -130,7 +134,7 @@ re-vérifier avec `pkg-config`.
   `UserScript::new` : **non vérifié** (`user_script.rs` l. 20-37 sans doc ; conclure de l'absence de
   `world_name` serait une hypothèse). `webkit2gtk-2.0.2` offre pourtant `UserScript::for_world(…, world_name, …)`
   (`src/auto/user_script.rs` l. 44, sous `v2_22`, active via `v2_38`) et `UserStyleSheet::for_world`
-  (`user_style_sheet.rs` l. 44). Accès possible : `WebViewExtUnix::webview()` (wry `lib.rs` l. 2430) puis
+  (`user_style_sheet.rs` l. 44). Accès possible : `WebViewExtUnix::webview()` (wry `lib.rs` l. 2430, trait l. 2414) puis
   `user_content_manager()` (`webkit2gtk` `web_view.rs` l. 1227). Que `world_name` crée un vrai monde
   isolé : **non vérifié** (doc WebKitGTK non lue). WebView2 : `AddScriptToExecuteOnDocumentCreated` (`src/webview2/mod.rs` l. 1444) ;
   monde de la page selon la doc Microsoft : **non vérifié** (doc non lue). Sous Windows les scripts
@@ -148,10 +152,16 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 - Nouvelle fenêtre : `with_new_window_req_handler` l. 1407. Proxy : `with_proxy_config` l. 1460.
 - Vues multiples : `build_as_child` l. 1573 ; Linux **X11 uniquement**, Wayland via
   `WebViewBuilderExtUnix::build_gtk` (l. 2041, 2061) avec `gtk::Fixed` ; `gtk::init` requis, boucle GTK à
-  avancer avec `gtk::main_iteration_do` ; **panique** si le handle est invalide ou `gtk::init` n'a pas été
-  appelé **dans le même thread** (doc l. 1541-1544 et 1569-1572 ; l. 2039 pour `build_gtk`). `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
-- Conséquence : le futur `PageEngine` ne peut appeler `build_as_child` qu'après avoir validé le handle
-  et l'init GTK sur le même thread (la panique ne se rattrape pas côté Rust strict).
+  avancer avec `gtk::main_iteration_do` ; **panique** si `gtk::init` n'a pas été appelé **dans le même
+  thread** (doc l. 1541-1544 et 1569-1572 ; l. 2039 pour `build_gtk`). La doc dit aussi « panique si le
+  handle est invalide » (l. 1571), mais la source Linux est différente : `build_as_child` → `new_as_child`
+  (l. 1576) → `new_x11` (`src/webkitgtk/mod.rs` l. 132) : un handle non Xlib renvoie
+  `Err(Error::UnsupportedWindowHandle)` (l. 150-152), sans panique ; la vraie panique est
+  `gdk_display.downcast_ref::<X11Display>().unwrap()` (l. 158) quand le display GDK par défaut n'est pas
+  X11. Panique pour handle invalide hors Linux : **non vérifié.** `set_bounds` (l. 2266) n'agit que pour un enfant ou `build_gtk` + `gtk::Fixed`.
+- Conséquence : le futur `PageEngine` doit vérifier que le display GDK est X11 et que `gtk::init` a été
+  appelé sur ce thread avant `build_as_child` ; valider le handle ne suffit pas (la panique ne se rattrape
+  pas côté Rust strict).
 - CEF : titre `on_title_change` (`cef` l. 17770), URL `on_address_change` (l. 17762), chargement
   `on_load_start` (l. 21584) / `on_load_end` (l. 21592), navigation `on_before_browse` (l. 26940).
   Vues multiples côté CEF : **non vérifié.**
@@ -160,7 +170,7 @@ Toutes les lignes sont dans `R/wry-0.57.3/src/lib.rs` :
 Défauts des réglages WebKit ; OCSP/CRL et rapports WebKitGTK ; flags WebView2 de mise à jour/crash/
 télémétrie ; tous les switches Chromium de CEF ; survie de l'hôte à un crash de rendu (3 moteurs) ;
 préférences/policies CEF (noms) ; `<link rel=prefetch>` ; `window.chrome.webview` sans handler ; sémantique de `msSmartScreenProtection` ;
-sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
+héritage du contexte par une vue `with_related_view` ; persistance par défaut sans `WebsiteDataManager` ; sémantique de `world_name` (`for_world`) et monde de `UserScript::new` (WebKitGTK) ; ordre réglages/premier chargement (WebKitGTK) ; URL et version des pages Microsoft WebView2 ; constats tirés de la doc 2.42.5 (non vérifiés pour 2.38) ; monde d'exécution des scripts WebView2 et CEF ; vues multiples CEF ; `tao` non lu.
 
 ## 2026-11-26 — veille hebdomadaire
 
