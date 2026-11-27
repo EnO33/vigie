@@ -46,11 +46,12 @@ impl Browser {
         engine: &mut dyn PageEngine,
         url: &WebUrl,
     ) -> Result<TabId, BrowseError> {
+        let previous = self.active_id();
         let tab = self.open_blank(engine)?;
         if let Err(error) = engine.load(tab, url) {
             // Le rollback est au mieux : l'erreur renvoyée reste celle du `load`.
             engine.close_view(tab).ok();
-            self.tabs.close(tab).ok();
+            self.rollback(tab, previous);
             return Err(error.into());
         }
         Ok(tab)
@@ -62,9 +63,10 @@ impl Browser {
     ///
     /// [`BrowseError`] ; l'onglet est alors retiré de la barre.
     pub fn open_blank(&mut self, engine: &mut dyn PageEngine) -> Result<TabId, BrowseError> {
+        let previous = self.active_id();
         let tab = self.tabs.open_blank()?;
         if let Err(error) = engine.create_view(tab) {
-            self.tabs.close(tab).ok();
+            self.rollback(tab, previous);
             return Err(error.into());
         }
         Ok(tab)
@@ -147,6 +149,18 @@ impl Browser {
     #[must_use]
     pub const fn tabs(&self) -> &TabStrip {
         &self.tabs
+    }
+
+    fn active_id(&self) -> Option<TabId> {
+        self.tabs.active().map(vigie_domain::Tab::id)
+    }
+
+    /// Retire l'onglet ouvert et rend l'activité à l'onglet qui l'était avant.
+    fn rollback(&mut self, tab: TabId, previous: Option<TabId>) {
+        self.tabs.close(tab).ok();
+        if let Some(previous) = previous {
+            self.tabs.activate(previous).ok();
+        }
     }
 
     fn require(&self, tab: TabId) -> Result<(), TabStripError> {
@@ -241,9 +255,33 @@ mod tests {
         fake.fail_call(1, "boom");
         let result = browser.open_page(&mut fake, &url("https://example.org"));
         assert_eq!(result, Err(engine_error("boom")));
-        assert!(matches!(fake.calls.last(), Some(EngineCall::CloseView(_))));
+        let Some(&EngineCall::CreateView(t)) = fake.calls.first() else {
+            panic!("create_view attendu en premier");
+        };
+        assert_eq!(fake.calls.last(), Some(&EngineCall::CloseView(t)));
         assert!(fake.views.is_empty());
         assert_eq!(browser.tabs().tabs(), []);
+    }
+
+    #[test]
+    fn failed_open_keeps_previous_active_tab() {
+        let mut browser = Browser::new();
+        let mut fake = FakePageEngine::default();
+        let a = browser.open_blank(&mut fake).unwrap();
+        browser.open_blank(&mut fake).unwrap();
+        browser.open_blank(&mut fake).unwrap();
+        browser.tabs.activate(a).unwrap();
+        fake.fail_next("view");
+        assert!(browser.open_blank(&mut fake).is_err());
+        assert_eq!(browser.active_id(), Some(a));
+        fake.fail_call(1, "load");
+        assert!(
+            browser
+                .open_page(&mut fake, &url("https://example.org"))
+                .is_err()
+        );
+        assert_eq!(browser.active_id(), Some(a));
+        assert_eq!(browser.tabs().tabs().len(), 3);
     }
 
     #[test]
