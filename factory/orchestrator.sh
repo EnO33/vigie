@@ -71,16 +71,83 @@ run_agent() {
 # Les PR portant le label `board` appartiennent à l'humain : la factory ne les touche jamais.
 NOT_BOARD='select(([.labels[].name] | index("board")) | not)'
 
-first_pr_with() {
-  gh pr list --repo "$REPO" --state open --label "$1" --json number,labels \
-    --jq "[.[] | $NOT_BOARD][0].number // empty"
+# ---------------------------------------------------------------- garde-fou « sans effet »
+
+# Un passage d'agent qui ne change ni l'état, ni les labels, ni la tête de PR, ni le nombre de
+# sub-issues de sa cible la met de côté STALL_HOURS heures : la sélection passe au candidat
+# suivant au lieu de relancer le même agent à chaque tick. Les commentaires ne comptent pas
+# comme un effet. Cible « plan » : la planification du product-owner (nombre d'epics).
+STALL_HOURS="${STALL_HOURS:-24}"
+
+fingerprint() {
+  local key="$1" fp head=""
+  if [ "$key" = plan ]; then
+    gh issue list --repo "$REPO" --state all --label type:epic --limit 500 --json number --jq 'length'
+    return
+  fi
+  fp="$(gh api "repos/$REPO/issues/$key" --jq '[.state, ([.labels[].name] | sort | join(",")),
+    (.sub_issues_summary.total // 0 | tostring), (if .pull_request then "pr" else "issue" end)] | join("|")')" \
+    || return 1
+  if [ "${fp##*|}" = pr ]; then
+    head="$(gh api "repos/$REPO/pulls/$key" --jq '.head.sha')" || return 1
+  fi
+  printf '%s|%s\n' "${fp%$'\r'}" "${head%$'\r'}"
 }
 
-# PR en revue à qui il manque le label $1
-first_in_review_missing() {
-  gh pr list --repo "$REPO" --state open --label status:in-review --json number,labels \
-    --jq "[.[] | $NOT_BOARD | select(([.labels[].name] | index(\"$1\")) | not)][0].number // empty"
+# Vrai si la cible a été mise de côté il y a moins de STALL_HOURS heures et n'a pas changé depuis.
+is_stalled() {
+  local file="$STATE_DIR/stalled-$1" ts fp
+  [ -f "$file" ] || return 1
+  read -r ts fp <"$file" || return 1
+  [ $(( $(date -u +%s) - ts )) -lt $(( STALL_HOURS * 3600 )) ] || return 1
+  [ "$(fingerprint "$1" 2>/dev/null)" = "$fp" ]
 }
+
+# Premier candidat (un par ligne sur l'entrée) qui n'est pas mis de côté.
+first_unstalled() {
+  local n
+  while read -r n; do
+    n="${n%$'\r'}"
+    [ -n "$n" ] || continue
+    is_stalled "$n" || { echo "$n"; return 0; }
+  done
+}
+
+# run_guarded <agent> <cible> <mission> : run_agent, puis mise de côté si le passage est sans effet.
+# Un agent en échec (limite d'usage) n'est pas mis de côté : run_agent gère déjà le backoff.
+run_guarded() {
+  local agent="$1" key="$2" prompt="$3" before after
+  before="$(fingerprint "$key" 2>/dev/null)" || before=""
+  run_agent "$agent" "$prompt" || return 1
+  after="$(fingerprint "$key" 2>/dev/null)" || after=""
+  if [ -n "$before" ] && [ "$before" = "$after" ]; then
+    echo "$(date -u +%s) $after" >"$STATE_DIR/stalled-$key"
+    local label="#$key" link="https://github.com/$REPO/issues/$key"
+    if [ "$key" = plan ]; then
+      label="la planification"; link="https://github.com/$REPO/issues?q=label%3Atype%3Aepic"
+    fi
+    log "⚠ $agent sans effet sur $label : mis de côté ${STALL_HOURS} h"
+    notify "Agent $agent sans effet sur $label" high warning "$link" \
+      "Ni état, ni labels, ni tête de PR n'ont changé. Cible mise de côté ${STALL_HOURS} h."
+  else
+    rm -f "$STATE_DIR/stalled-$key"
+  fi
+}
+
+# ---------------------------------------------------------------- sélection
+
+prs_with() {
+  gh pr list --repo "$REPO" --state open --label "$1" --json number,labels \
+    --jq ".[] | $NOT_BOARD | .number"
+}
+first_pr_with() { prs_with "$1" | first_unstalled; }
+
+# PR en revue à qui il manque le label $1
+in_review_missing() {
+  gh pr list --repo "$REPO" --state open --label status:in-review --json number,labels \
+    --jq ".[] | $NOT_BOARD | select(([.labels[].name] | index(\"$1\")) | not) | .number"
+}
+first_in_review_missing() { in_review_missing "$1" | first_unstalled; }
 
 first_fully_approved_pr() {
   gh pr list --repo "$REPO" --state open --json number,labels \
@@ -118,13 +185,18 @@ wip_count() {
     --jq "[.[] | $NOT_BOARD | $WORK_TYPES] | length"
 }
 
-# Issue prête (story, chore ou bug) la plus prioritaire : p0 < p1 < p2 < sans prio, puis numéro.
-next_ready_story() {
+# Issues prêtes (story, chore ou bug) par priorité : p0 < p1 < p2 < sans prio, puis numéro.
+ready_work() {
   gh issue list --repo "$REPO" --state open --label status:ready \
     --json number,labels --limit 100 \
     --jq "[.[] | $NOT_BOARD | $WORK_TYPES
            | {n: .number, p: ([.labels[].name | select(startswith(\"prio:\"))][0] // \"prio:p9\")}]
-          | sort_by(.p, .n) | .[0].n // empty"
+          | sort_by(.p, .n) | .[].n"
+}
+next_ready_story() { ready_work | first_unstalled; }
+
+blocked_issues() {
+  gh issue list --repo "$REPO" --state open --label status:blocked --json number --jq '.[].number'
 }
 
 epics_with_status() {
@@ -270,13 +342,13 @@ tick() {
   fi
 
   n="$(first_pr_with status:changes-requested)"
-  if [ -n "$n" ]; then run_agent developer "Mission : corriger la PR #$n."; return; fi
+  if [ -n "$n" ]; then run_guarded developer "$n" "Mission : corriger la PR #$n."; return; fi
 
   n="$(first_in_review_missing review:approved)"
-  if [ -n "$n" ]; then run_agent reviewer "Mission : revoir la PR #$n."; return; fi
+  if [ -n "$n" ]; then run_guarded reviewer "$n" "Mission : revoir la PR #$n."; return; fi
 
   n="$(first_in_review_missing security:approved)"
-  if [ -n "$n" ]; then run_agent security-auditor "Mission : auditer la PR #$n."; return; fi
+  if [ -n "$n" ]; then run_guarded security-auditor "$n" "Mission : auditer la PR #$n."; return; fi
 
   n="$(first_fully_approved_pr)"
   if [ -n "$n" ]; then merge_if_green "$n"; return; fi
@@ -290,20 +362,22 @@ tick() {
 
   if [ "$(wip_count)" -lt "$WIP_LIMIT" ]; then
     n="$(next_ready_story)"
-    if [ -n "$n" ]; then run_agent developer "Mission : implémenter l'issue #$n."; return; fi
+    if [ -n "$n" ]; then run_guarded developer "$n" "Mission : implémenter l'issue #$n."; return; fi
   fi
 
   for n in $(epics_with_status status:ready); do
-    if [ "$(sub_issue_total "$n")" = "0" ]; then
-      run_agent architect "Mission : découper l'epic #$n."; return
+    n="${n%$'\r'}"
+    if [ "$(sub_issue_total "$n")" = "0" ] && ! is_stalled "$n"; then
+      run_guarded architect "$n" "Mission : découper l'epic #$n."; return
     fi
   done
 
-  n="$(gh issue list --repo "$REPO" --state open --label status:blocked --json number --jq '.[0].number // empty')"
-  if [ -n "$n" ]; then run_agent architect "Mission : débloquer l'issue #$n."; return; fi
+  n="$(blocked_issues | first_unstalled)"
+  if [ -n "$n" ]; then run_guarded architect "$n" "Mission : débloquer l'issue #$n."; return; fi
 
-  if [ -z "$(epics_with_status status:ready)" ] && [ -z "$(epics_with_status status:in-progress)" ]; then
-    run_agent product-owner "Mission : planifier le prochain epic."; return
+  if [ -z "$(epics_with_status status:ready)" ] && [ -z "$(epics_with_status status:in-progress)" ] \
+      && ! is_stalled plan; then
+    run_guarded product-owner plan "Mission : planifier le prochain epic."; return
   fi
 
   log "rien à faire"

@@ -88,6 +88,7 @@ run_gates() {
   step "hooks";         bash "$FACTORY_DIR/hooks/guard.test.sh"
                         bash "$FACTORY_DIR/orchestrator.test.sh"
                         bash "$FACTORY_DIR/orchestrator-notify.test.sh"
+                        bash "$FACTORY_DIR/orchestrator-stall.test.sh"
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
