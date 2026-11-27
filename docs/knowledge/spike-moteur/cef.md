@@ -2,7 +2,7 @@
 
 Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`5c7fd0ce81d75dbc3bf6eb81f54ceb4085896c4f`**
 (`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` (revu) `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
-`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact **non consigné** (`run.sh` n'existe pas à `a8ed63b`, elles ont été lancées avec les variables exportées à la main), ainsi que le premier essai de `kill -9`.
+`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact et commande exacte **non consignés** (`run.sh` n'existe pas à `a8ed63b`) ; ainsi que le premier essai de `kill -9`.
 Xvfb (pid 21406, `:99`) **tournait déjà** pendant les mesures publiées (lancé hors `measure.sh`) ; je n'ai **pas** rejoué à froid (non vérifié : avec l'ancien `run.sh` sans `setsid`, un Xvfb absent aurait été compté dans la session mesurée).
 Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836`). Chaque chiffre vient d'une commande ci-dessous, recopiée.
 
@@ -60,10 +60,11 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
   Index `index.json` de ce CDN, archive `cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_linux64_minimal.tar.bz2` (333 321 290 octets).
 - **Somme de contrôle** : SHA-1 `0adb813face4ca098f17210fe471b172c2bc1950` (`archive.json` écrit par la build ; `sha1sum` de l'archive donne la même valeur).
   Une somme **SHA-1** seulement, issue de l'index du même CDN : pas de signature (non vérifié : l'index est-il authentifié ailleurs).
-- `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 18-41), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
+  **Cette somme n'est vérifiée qu'au téléchargement** (`download-cef-3.0.1/src/lib.rs` l. 329, `calculate_file_sha1 != sha`). **Hors réseau, aucune vérification d'intégrité n'est faite** : `check_archive` → `check_archive_json` (l. 102-123) lit seulement le **nom** dans `archive.json` et accepte toute version `<=` 156.0.31 (l. 114, `archive <= expected`), donc aussi une version plus ancienne ; aucun hash des fichiers extraits. Un `CEF_PATH` « valide » n'est pas un `CEF_PATH` contrôlé.
+- `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 109-110 → `resolve_cef_dir` l. 25-55, téléchargement l. 28-52), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
   ou si son contenu n'est pas valide (l. 87-108 : `download_to_versioned`).
-- **Build hors réseau : oui, dans deux cas** (`build.rs` l. 87-108) : `CEF_PATH/156.0.31/cef_linux_x86_64/` existe avec un `archive.json` valide (l. 91-92, 45-53) ; ou `CEF_PATH` à plat (sans `156.0.31/`) contient un `archive.json` valide (l. 99).
-  **Téléchargement** si `CEF_PATH` n'existe pas (l. 107), si `CEF_PATH` à plat est invalide (l. 100), ou si `156.0.31/` existe sans `cef_linux_x86_64/` (`resolve_cef_dir` l. 28-40). `CEF_PATH/156.0.31/` avec un `archive.json` invalide : pas de téléchargement, la build **échoue** (`check_archive`). Testé ici : le premier cas seulement. `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
+- **Build hors réseau : oui, dans deux cas** (`build.rs` l. 87-108) : `CEF_PATH/156.0.31/cef_linux_x86_64/` existe avec un `archive.json` valide (`resolve_from_versioned` l. 57-66, `check_archive` l. 64) ; ou `CEF_PATH` à plat (sans `156.0.31/`) contient un `archive.json` valide (l. 99).
+  **Téléchargement** si `CEF_PATH` n'existe pas (l. 107), si `CEF_PATH` à plat est invalide (l. 100), ou si `156.0.31/` existe sans `cef_linux_x86_64/` (`resolve_cef_dir` l. 28-52). `CEF_PATH/156.0.31/` avec un `archive.json` invalide : pas de téléchargement, la build **échoue** (`check_archive`, l. 64). Testé ici : le premier cas seulement. `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
   `CEF_PATH` (pas `CEF_DOWNLOAD_URL`) : la preuve est donc faite depuis un `target/` **neuf** (`rm -rf` puis `CARGO_TARGET_DIR=/tmp/target-cef-clean`) :
   `CEF_DOWNLOAD_URL=http://127.0.0.1:9 CEF_PATH=/tmp/cefdl cargo build --release --offline` réussit (« Finished `release` profile in 21.23s », `cef-dll-sys` recompilé) ;
   un téléchargement aurait échoué sur le port 9. Je n'ai pas coupé le réseau du noyau (`unshare` refusé) : preuve indirecte.
@@ -75,7 +76,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 
 Commande (Xvfb et variables d'environnement gérés par `run.sh`) :
 `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs N`, 10 lancements chacun, caches `/tmp/vigie-spike-cef` chauds
-sauf le tout premier lancement. Mesure = spawn → `VIGIE_SPIKE_READY` (premier chargement de la page locale), pas le premier pixel visible ; elle inclut le `bash` de `run.sh` (quelques ms, non mesurés).
+sauf le tout premier lancement. Mesure = spawn → `VIGIE_SPIKE_READY` (premier chargement de la page locale), pas le premier pixel visible ; elle inclut le `bash` de `run.sh`, **non mesuré** : un `pgrep -f` et, si le binaire est plus récent que `/tmp/cefrun`, un `cp -r` d'environ 1,5 Go ; les mesures ci-dessous ont `/tmp/cefrun` à jour et Xvfb déjà lancé.
 Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur de `uptime`, 1 min) :
 
 | `--tabs` | série | charge (1 min) | médiane | min | max |
@@ -96,7 +97,7 @@ Mesures de la revue, même conteneur, binaire de `5c7fd0c`, Xvfb déjà lancé, 
 | 1,21 | 5 | 203 (199-230) ms | 397 (322-421) ms |
 
 Autres mesures de la revue au SHA `1325dd1` : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
-**Lecture honnête : la médiane varie d'une session à l'autre, d'environ 160 à 260 ms pour 1 vue et d'environ 255 à 400 ms pour 10 vues.** La charge ne l'explique pas : les séries de la revue ont une charge plus basse (0,57-1,21) que les miennes (1,7-3,1) et sont plus lentes. Cause **non vérifiée**.
+**Lecture honnête : la médiane varie d'une session à l'autre, d'environ 160 à 270 ms pour 1 vue et d'environ 255 à 400 ms pour 10 vues.** La charge ne l'explique pas : les séries de la revue ont une charge plus basse (0,57-1,21) que les miennes (1,7-3,1) et sont plus lentes. Cause **non vérifiée**.
 Pour l'ADR : la variance entre sessions est du même ordre que l'écart entre 1 et 10 vues.
 
 Rejouer : `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs 1` (depuis la racine du dépôt, `run.sh` pris sur `spike/moteur-cef`).
@@ -104,7 +105,7 @@ Avec 10 vues, `VIGIE_SPIKE_READY` sort à la **première** page chargée : les 9
 
 ## Critère 3 — mémoire
 
-Commande : `measure.sh memory --settle 5 --timeout 60 -- spike/cef/run.sh --tabs N` (somme des RSS de la session, 5 s après READY ; une mesure par cas, refaite avec le binaire du SHA ci-dessus).
+Commande : `measure.sh memory --settle 5 --timeout 60 -- spike/cef/run.sh --tabs N` (somme des RSS de la session, 5 s après READY ; une mesure par cas, refaite avec le binaire de `1325dd1` (identique à `5c7fd0c`, `cmp`)).
 
 | `--tabs` | RSS total |
 |---|---|
@@ -142,8 +143,7 @@ Les noms de domaine n'ont pas pu être relevés : les requêtes DNS passent par 
 
 **Captures B (avec switches).** #14 n'a pas établi de noms de switches (« non vérifié », `docs/knowledge/LOG.md`, Q3). J'ai donc pris des noms
 connus de Chromium et vérifié seulement qu'ils sont des chaînes présentes dans `libcef.so` (`grep -c -a -F -- <nom> libcef.so` ≥ 1 pour chacun) : ce n'est **pas** une preuve de leur effet.
-`VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run`
-exportée avant `run.sh`. **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par la revue : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
+`VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run` : commande exacte de lancement **non consignée** (la commande ci-dessus, avec `run.sh`, vaut pour A seulement). **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par la revue : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
 
 ```
 network_calls=17
@@ -204,6 +204,6 @@ plusieurs vues partageant un rendu.
 - Noms de domaine contactés ; effet réel de chaque switch ; processus à l'origine des connexions.
 - `cargo deny` sur le projet (repris de l'architecte, non relancé).
 - Autre machine que ce conteneur WSL2 ; Wayland (CEF Views sous X11 seulement ici).
-- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (160-260 ms pour 1 vue, charge exclue comme explication simple).
+- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (160-270 ms pour 1 vue, charge exclue comme explication simple).
 - Trafic réseau avec un profil existant : les captures sont un premier lancement (profil vide).
 - Panneau invisible avec une fenêtre Chrome (cause non établie).
