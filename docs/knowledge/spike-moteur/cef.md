@@ -1,8 +1,9 @@
 # Spike moteur — CEF 156 (crate `cef` 156.7.0+156.0.31), Linux X11 sous Xvfb
 
-Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`1325dd1a5baa9bed266a15bbae841cf165934a88`**
-(`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` (revu) `run.sh`, le choix du style de fenêtre
-`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view` ; toutes les mesures ci-dessous ont été **refaites** avec le binaire de ce SHA.
+Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`5c7fd0ce81d75dbc3bf6eb81f54ceb4085896c4f`**
+(`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` (revu) `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
+`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage, mémoire et réseau ont été refaites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change) ; l'observation des switches (« Seconde capture ») et un premier essai de `kill -9` viennent de `a8ed63b` ou d'un essai à la main (dits plus bas).
+Xvfb (pid 21406, `:99`) **tournait déjà** pendant les mesures publiées (lancé hors `measure.sh`) ; je n'ai **pas** rejoué à froid (non vérifié : avec l'ancien `run.sh` sans `setsid`, un Xvfb absent aurait été compté dans la session mesurée).
 Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836`). Chaque chiffre vient d'une commande ci-dessous, recopiée.
 
 ## Machine et conditions
@@ -14,7 +15,7 @@ Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836
 | CEF / Chromium | `156.0.31+ge603d97+chromium-156.0.8078.100` (archive `minimal`, `linux64`) |
 | Crate | `cef = { version = "=156.7.0", default-features = false }`, profil `release`, `rustc 1.100.0` |
 | Affichage | `Xvfb :99 -screen 0 1280x800x24`, X11 uniquement (pas de `--ozone-platform=headless`) |
-| Lancement | `spike/cef/run.sh [--tabs N]` : prépare `/tmp/cefrun`, démarre Xvfb `:99` s'il manque, exporte `DISPLAY=:99 LD_LIBRARY_PATH=/tmp/cefrun VIGIE_SPIKE_NO_SANDBOX=1` (voir « Bac à sable ») |
+| Lancement | `spike/cef/run.sh [--tabs N]` : prépare `/tmp/cefrun`, démarre Xvfb `:99` s'il manque (`setsid -f`), exporte `DISPLAY=:99 LD_LIBRARY_PATH=/tmp/cefrun VIGIE_SPIKE_NO_SANDBOX=1` (voir « Bac à sable ») |
 
 Le prototype (`src/main.rs`, ~150 lignes) : une fenêtre Views en style **Alloy**, un panneau (`panel_create`) de 150 px et `--tabs N`
 `BrowserView` en boîte horizontale (flex 1), page locale `data:text/html,<h1>vigie spike</h1>` (aucun réseau demandé par la page).
@@ -22,7 +23,7 @@ Le prototype (`src/main.rs`, ~150 lignes) : une fenêtre Views en style **Alloy*
 `on_before_command_line_processing` (processus navigateur seulement).
 
 Reproduire : `CEF_PATH=/tmp/cefdl cargo build --release` dans `spike/cef` (archive déjà extraite dans `/tmp/cefdl/156.0.31/`), puis `spike/cef/run.sh --tabs N`
-(copie le binaire, `libcef.so`, `*.pak`, `*.dat`, `*.bin`, `locales/`, `libvk_swiftshader.so`, `libvulkan.so.1`, `vk_swiftshader_icd.json` dans `/tmp/cefrun`).
+(`run.sh` copie le binaire et les fichiers de CEF dans `/tmp/cefrun` ; la liste est dans `run.sh`).
 Le binaire n'a pas de `rpath` : `LD_LIBRARY_PATH` est obligatoire (posé par `run.sh`). Sans `run.sh`, la commande meurt (`libcef.so` introuvable, ou code 133 sans `VIGIE_SPIKE_NO_SANDBOX`). Deux builds du même SHA (avec et sans réseau, voir critère 7) donnent des binaires identiques (`cmp`).
 
 ## Bac à sable de Chromium : `--no-sandbox` nécessaire ici
@@ -61,7 +62,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
   Une somme **SHA-1** seulement, issue de l'index du même CDN : pas de signature (non vérifié : l'index est-il authentifié ailleurs).
 - `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 18-41), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
   ou si son contenu n'est pas valide (l. 87-108 : `download_to_versioned`).
-- **Build hors réseau : oui, seulement si `CEF_PATH` contient `156.0.31/` et un `archive.json` valide.** `build.rs` l. 13-15 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
+- **Build hors réseau : oui, seulement si `CEF_PATH` contient `156.0.31/` et un `archive.json` valide.** `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
   `CEF_PATH` (pas `CEF_DOWNLOAD_URL`) : la preuve est donc faite depuis un `target/` **neuf** (`rm -rf` puis `CARGO_TARGET_DIR=/tmp/target-cef-clean`) :
   `CEF_DOWNLOAD_URL=http://127.0.0.1:9 CEF_PATH=/tmp/cefdl cargo build --release --offline` réussit (« Finished `release` profile in 21.23s », `cef-dll-sys` recompilé) ;
   un téléchargement aurait échoué sur le port 9. Je n'ai pas coupé le réseau du noyau (`unshare` refusé) : preuve indirecte.
@@ -87,7 +88,7 @@ Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur
 
 Une première passe (même jour, charge ~1,3, avant ces séries) avait donné 162 ms (1 vue) et 232-244 ms (10 vues) ; elle n'est pas gardée (charge non relevée série par série).
 **Écart avec la revue** : le reviewer a mesuré 203-221 ms (médianes, 1 vue) avec le binaire de `a8ed63b`, dans le même conteneur. Je n'ai pas élucidé les ~30-40 ms d'écart
-(hypothèse non testée : charge ou état du cache disque à ce moment-là, dont je n'ai pas la mesure). Lecture honnête : **ordre de 160-220 ms pour 1 vue, 245-350 ms pour 10 vues**,
+(hypothèse non testée : charge ou état du cache disque à ce moment-là, dont je n'ai pas la mesure). Lecture honnête : **ordre de 160-220 ms pour 1 vue, 244-353 ms pour 10 vues**,
 selon la charge de la machine ; la plage « 150-180 ms » annoncée d'abord était trop étroite.
 
 Rejouer : `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs 1` (depuis la racine du dépôt, `run.sh` pris sur `spike/moteur-cef`).
@@ -134,7 +135,7 @@ Les noms de domaine n'ont pas pu être relevés : les requêtes DNS passent par 
 **Seconde capture, avec switches.** #14 n'a pas établi de noms de switches (« non vérifié », `docs/knowledge/LOG.md`, Q3). J'ai donc pris des noms
 connus de Chromium et vérifié seulement qu'ils sont des chaînes présentes dans `libcef.so` (`grep -c -a -F -- <nom> libcef.so` ≥ 1 pour chacun) : ce n'est **pas** une preuve de leur effet.
 `VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run`
-exportée avant `run.sh`. Présence de `--disable-background-networking` dans la ligne de commande du processus navigateur confirmée via `/proc/<pid>/cmdline` (première passe, sur `a8ed63b`) :
+exportée avant `run.sh`. **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par la revue : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
 
 ```
 network_calls=17
@@ -177,7 +178,7 @@ la capture est **octet pour octet identique** (`cmp`) à celle d'avant. La cause
 
 `--tabs 1`, ~6 s après le lancement. Les rendus gardent la ligne de commande du zygote ; plusieurs enfants du zygote existent et seul le rendu fait sortir le callback.
 Commande qui a fonctionné deux fois de suite (le rendu est le plus grand PID enfant du zygote sans `--no-zygote-sandbox` ; règle empirique, 2 essais) :
-`Z=$(pgrep -f -- '--type=zygote --no-sandbo[x]' | head -1); kill -9 "$(pgrep -P "$Z" | sort -n | tail -1)"` (les crochets évitent que `pgrep` se retrouve lui-même).
+`Z=$(pgrep -f -- '--type=zygote --no-sandbo[x]' | head -1); kill -9 "$(pgrep -P "$Z" | sort -n | tail -1)"` (les crochets évitent de tuer le shell appelant, dont la ligne de commande contient le motif).
 Lors d'un premier essai à la main, `kill -9` sur les deux autres enfants du zygote n'a rien déclenché et l'hôte a survécu. Sortie du prototype :
 
 ```
@@ -195,4 +196,4 @@ plusieurs vues partageant un rendu.
 - Noms de domaine contactés ; effet réel de chaque switch ; processus à l'origine des connexions.
 - `cargo deny` sur le projet (repris de l'architecte, non relancé).
 - Autre machine que ce conteneur WSL2 ; Wayland (CEF Views sous X11 seulement ici).
-- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; écart de démarrage avec la revue (203-221 ms contre 162-175 ms).
+- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; écart de démarrage avec la revue (203-221 ms contre 174-175 ms ; la revue a ensuite mesuré 161-162 ms le même jour, ce qui renforce l'hypothèse « charge »).
