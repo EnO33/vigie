@@ -50,7 +50,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 - Blocs `unsafe` **écrits** dans le prototype : **0** (`grep -c unsafe src/main.rs`). Blocs `unsafe {` **dans le code expansé** des macros
   `wrap_*!` du crate : **16** pour 8 types enveloppés (2 par type : `Clone::clone` et `Drop`), mesurés avec
   `RUSTC_BOOTSTRAP=1 cargo rustc --release -- -Zunpretty=expanded | grep -c 'unsafe {'`. Les règles du projet interdisent `unsafe` : il faudrait
-  vérifier si les lints voient du code issu d'une macro externe (non vérifié). Les pointeurs nuls passés à `execute_process`/`initialize`
+  vérifier si les lints voient du code issu d'une macro externe. Vérifié par la revue (PR #32, 5e tour) avec deux crates de test : `unsafe` dans une `macro_rules!` d'un crate A, appelée depuis un crate B en `unsafe_code = "forbid"` (la valeur de `Cargo.toml` l. 23 du workspace) → build OK, **aucun diagnostic** ; le même `unsafe` écrit dans B est refusé. Les 16 blocs passeraient donc sans bruit. Je n'ai pas rejoué cet essai. Les pointeurs nuls passés à `execute_process`/`initialize`
   (`windows_sandbox_info`) n'exigent aucun `unsafe`.
 - Le crate lui-même contient `unsafe` partout (ex. `impl Default for BoxLayoutSettings` utilise `std::mem::zeroed()`) : c'est la surface FFI, hors du code de Vigie.
 
@@ -136,8 +136,10 @@ network_dest=[2001:4860:4860::8888]:443
 (`127.0.0.11:53` est le DNS du conteneur.) A2 (sans switches) : 27 appels, mêmes 8 destinations, sauf `192.178.204.113` au lieu de `192.178.204.139`.
 Les IP d'une famille changent d'une capture à l'autre (DNS, répartition de charge) ; les ports et les ensembles restent stables.
 
-Les noms de domaine n'ont pas pu être relevés : les requêtes DNS passent par des sockets UDP déjà connectées (`send` sans adresse), limite connue de
-`measure.sh`, et un `strace -e trace=send,sendmsg` n'a pas montré les noms. **Je ne les attribue pas** : `2001:4860:4860::8888` est une adresse Google Public DNS
+Les noms de domaine n'ont **pas été relevés**. Les requêtes DNS passent probablement par des sockets UDP déjà connectées, où glibc émet `sendto(fd, buf, len, 0, NULL, 0)` :
+`measure.sh` trace déjà `sendto`, donc le paquet DNS est dans la trace brute, mais il n'est pas compté (le comptage exige `sa_family=`). Les noms seraient lisibles dans ces
+`sendto`/`sendmmsg` vers les sockets connectées sur :53, avec `strace -s 256` : **pas tenté**. (Mon essai `strace -e trace=send,sendmsg` ne prouvait rien : x86_64 n'a pas d'appel système `send`.)
+**Je ne les attribue pas** : `2001:4860:4860::8888` est une adresse Google Public DNS
 (connaissance générale, non vérifiée ici) ; le reste est non identifié. Les `connect` observés en A2 viennent d'un seul identifiant de thread/processus
 (`-f` trace les threads) ; le processus exécuté de `--type=utility` (`network.mojom.NetworkService`) a un autre PID : le lien est **probable, non prouvé**.
 
@@ -170,9 +172,9 @@ chacune affichant « vigie spike » (`spike/cef/captures/multiview-2tabs-panel.p
 
 Condition établie par l'essai : avec le style par défaut (Chrome) pour les **vues**, le deuxième `BrowserView` est refusé :
 `ERROR:cef/libcef/browser/views/browser_view_impl.cc:324] Cannot add multiple Chrome style BrowserViews`. Il faut donc le style **Alloy pour chaque vue**
-(`BrowserViewDelegate::browser_runtime_style`), ce que fait le prototype. La doc C de `cef_runtime_style_t` (`cef-dll-sys` bindings l. 17569, `x86_64_unknown_linux_gnu.rs`) dit en entier :
+(`BrowserViewDelegate::browser_runtime_style`), ce que fait le prototype. La doc C de `cef_runtime_style_t` (`cef-dll-sys` bindings l. 17569, `x86_64_unknown_linux_gnu.rs`) dit :
 « Alloy style Windows with the Views framework can host only Alloy style BrowserViews but Chrome style Windows can host both style BrowserViews. Additionally, a Chrome style
-Window can host at most one Chrome style BrowserView but potentially multiple Alloy style BrowserViews. »
+Window can host at most one Chrome style BrowserView but potentially multiple Alloy style BrowserViews. See CefWindowInfo.runtime_style documentation for any additional platform-specific limitations. »
 **Le style de la fenêtre n'a donc pas besoin d'être Alloy.** Testé (`VIGIE_SPIKE_WINDOW_STYLE=chrome spike/cef/run.sh --tabs 2`, capture `spike/cef/captures/multiview-2tabs-chrome-window.png`) :
 fenêtre en style Chrome + 2 vues Alloy, les deux pages s'affichent, aucune erreur `Cannot add multiple` dans la sortie. Ce que je n'ai pas observé : **le panneau de 150 px n'est pas visible** sur cette capture (x 0-150 blanc, indiscernable des vues ; il est gris avec une fenêtre Alloy), cause non établie : le critère « panneau + 2 vues » n'est donc démontré qu'avec une fenêtre Alloy ; aucune barre d'outils Chrome n'est visible non plus (cause non établie ; pas de gestionnaire de fenêtres sous Xvfb) ; l'apport réel du style Chrome pour la fenêtre (UI, extensions) n'est donc pas évalué. Sans flex, les vues gardent leur taille préférée (100×100) : il faut `set_flex_for_view` et
 `cross_axis_alignment = STRETCH`. Testé avec 2 vues (visuel, fenêtre Alloy et fenêtre Chrome) et 10 vues (démarrage, mémoire, fenêtre Alloy) ; pas de capture à 10 vues.
@@ -180,7 +182,7 @@ fenêtre en style Chrome + 2 vues Alloy, les deux pages s'affichent, aucune erre
 Couleur du panneau : hypothèse de la revue (`cef-dll-sys` bindings l. 32590 : « background color will be automatically reset when OnThemeChanged is called » ;
 l. 32260 : `OnThemeChanged` est appelé quand la vue est ajoutée à une fenêtre). Testée : `set_background_color` déplacé **après** `add_child_view` (`main.rs` du SHA ci-dessus) :
 la capture est **octet pour octet identique** (`cmp`) à celle d'avant. La cause reste donc **inconnue** ; l'hypothèse OnThemeChanged-à-l'ajout n'explique pas à elle seule l'échec
-(autre piste non testée : thème rappelé plus tard, ou couleur ignorée pour un `Panel` sans fond opaque).
+(piste de la revue, non testée : `cef-dll-sys` bindings l. 33886 dit que les couleurs du thème Chrome sont appliquées et `on_theme_changed` déclenché quand un `BrowserView` est ajouté à la hiérarchie de la fenêtre ; le panneau étant ajouté **avant** les vues, leur ajout remettrait la couleur, ce qui serait cohérent avec la capture identique. Piste à tester : `set_background_color` dans `ViewDelegate::on_theme_changed`, que l. 32260 recommande pour surcharger les couleurs du thème. Autre piste : couleur ignorée pour un `Panel` sans fond opaque.)
 
 ## Critère 5 — processus de rendu tué (`kill -9`)
 
