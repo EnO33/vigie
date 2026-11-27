@@ -100,7 +100,7 @@ Une vue wry de 300 px, avec `with_ipc_handler`, héberge l'interface ; chaque on
   exige `libxkbcommon-x11.so.0` et `libxcb-xkb.so.1` absentes de l'image, plante en `GLXBadWindow` si les vues sont créées
   pendant le premier `ui()` (cause non établie), impose winit à la place de tao et une pompe GTK manuelle. Sa seule vertu mesurée,
   la mémoire, passe après la robustesse et la confidentialité dans l'ordre de VISION.md. (B) reste faisable ; la décision se rouvre si
-  la mémoire devient bloquante (voir « Limites connues » : le coût par vue wry en incognito est probablement le coût réel).
+  la mémoire devient bloquante (voir « Limites connues » : le coût de ≈ +216 Mo par vue wry est une borne haute, à remesurer).
 
 ## Capacités pour le futur port `PageEngine`
 
@@ -119,7 +119,7 @@ Lignes de `wry-0.57.3/src/lib.rs` (`LOG.md`, Q6) :
   reste à l'écran. wry ne connecte pas `web-process-terminated` (accès par `WebViewExtUnix::webview()` ; signal côté API **non testé**) : l'adaptateur devra le brancher
   et recharger la vue. `with_related_view` partage un processus de rendu entre vues : un crash peut toucher plusieurs vues. WebView2 : `ProcessFailed` non géré par wry (`WebViewExtWindows::webview()`), **non mesuré**.
 - **Mémoire** : ≈ +216 Mo par vue (un `WebContext` par vue). Partager un `WebContext` n'a **pas** été remesuré, et sous wry 0.57.3 un contexte **éphémère** ne peut pas être partagé
-  par l'API publique : voir « Limites connues ». Ce chiffre est donc probablement le coût réel en incognito, pas une simple borne haute.
+  par l'API publique : voir « Limites connues ». Ce chiffre est une **borne haute** : mesuré sans incognito, avec un `WebContext` par vue (voir « Limites connues »).
 
 ## Limites connues
 
@@ -128,8 +128,10 @@ Lignes de `wry-0.57.3/src/lib.rs` (`LOG.md`, Q6) :
   `webview.uri().unwrap()` (l. 491, 494), `expect("WebView does not have UserContentManager")` (l. 735), `NewWindowResponse::Allow` (5 `unwrap`, fenêtre vide si échec) → **ne jamais répondre `Allow`**, seulement `Create` ou `Deny`.
   Avec `panic = "abort"` en release (`Cargo.toml`) et `catch_unwind` interdit (`clippy.toml`), une panique tue Vigie : l'adaptateur doit tester le display X11 et `gtk::init` avant `build_as_child`.
 - **Mémoire et incognito** : avec `with_incognito(true)`, le `WebContext` fourni est ignoré (`webkitgtk/mod.rs` l. 259-263) ; `WebContext::new_ephemeral` est `pub(crate)`
-  (`wry-0.57.3/src/web_context.rs` l. 54) ; `with_related_view` perd l'incognito (`LOG.md` Q1). Partager un contexte revient à persister (`WebContext::new(Some(dir))` écrit les cookies en clair,
-  `LOG.md` Q1) : contraire à la confidentialité, rang 1 de VISION.md. Le coût de ≈ +216 Mo par vue est donc probablement le coût réel, et pèse sur l'arbitrage (A)/(B).
+  (`wry-0.57.3/src/web_context.rs` l. 54) ; `with_related_view` perd l'incognito (`LOG.md` Q1). Partager un contexte **éphémère** est donc impossible par l'API publique (prouvé).
+  Partager `WebContext::new(None)` est possible (`web_context.rs` l. 46, `Default` l. 97-98 ; aucun `WebsiteDataManager` installé, `webkitgtk/web_context.rs` l. 32-50) ; sa persistance
+  sur disque par défaut est **non vérifiée** (`LOG.md` Q1). Seul `WebContext::new(Some(dir))` écrit les cookies en clair (prouvé), contraire à la confidentialité, rang 1 de VISION.md.
+  Les ≈ +216 Mo par vue ont été mesurés **sans incognito**, avec un contexte par vue : c'est une borne haute, pas le coût en incognito. Cela pèse sur l'arbitrage (A)/(B) si la remesure ne la réduit pas.
 - Une vue web de 150 px de large reste noire (3 essais, cause non cherchée) ; 300 px s'affiche. Les vues de page démarrent à x = 313 au lieu de 300 (cause non cherchée).
 - `Gdk-CRITICAL _gdk_frame_clock_freeze` une fois au démarrage (sans effet visible).
 - **Non mesuré** (annexes) : Windows/WebView2, macOS/WKWebView, Wayland, PSS, HiDPI, accessibilité, vraie page web, trafic réseau d'une page réelle, profil persistant.
@@ -150,5 +152,5 @@ Lignes de `wry-0.57.3/src/lib.rs` (`LOG.md`, Q6) :
 - **Confinement** : l'adaptateur moteur vit dans un crate `vigie-adapter-*` (nom exigé par `cargo xtask arch`, `xtask/src/rules.rs`) ; `wry`, `tao`, `gtk` n'apparaissent ni dans `vigie-domain` ni dans `vigie-app` (listes blanches `thiserror`, `url` / `thiserror`), qui ne connaissent que le port `PageEngine`.
   Les `unwrap`/paniques de wry sont désamorcés par des vérifications préalables dans l'adaptateur, qui renvoie des erreurs typées (ADR-0002).
 - **Remplaçabilité** : le port `PageEngine` reste la couture ; WebView2 et WKWebView sont attendus mais non mesurés : ils demandent leur propre mesure avant d'être déclarés supportés.
-- **Prochaines stories** (à créer par l'architecte, hors de cet ADR) : définition du port `PageEngine`, adaptateur wry/Linux, mesure du trafic réseau d'une vraie page, mesure Windows/macOS, remesure de la mémoire (un `WebContext` partagé n'est possible qu'en persistant : à mesurer sous cette réserve, ou avec un fork/une version exposant un contexte éphémère) avec wry 0.57.4 / 0.58.0 / 0.58.2 et tao 0.38.0 dès leur éligibilité (2026-12-01 à 2026-12-03).
+- **Prochaines stories** (à créer par l'architecte, hors de cet ADR) : définition du port `PageEngine`, adaptateur wry/Linux, mesure du trafic réseau d'une vraie page, mesure Windows/macOS, remesure de la mémoire (un `WebContext::new(None)` partagé, vérification de la persistance par défaut de WebKit, et incognito ; un contexte éphémère partagé exige un fork ou une version qui l'expose) avec wry 0.57.4 / 0.58.0 / 0.58.2 et tao 0.38.0 dès leur éligibilité (2026-12-01 à 2026-12-03).
 - Le spike ne laisse aucun code de prototype dans `crates/` ; restent cet ADR, les annexes `docs/knowledge/spike-moteur/` et `tools/spike-moteur/`.
