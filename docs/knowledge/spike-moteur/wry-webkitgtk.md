@@ -1,8 +1,8 @@
 # Spike moteur — wry 0.57.3 + tao 0.37.3 (WebKitGTK), Linux X11 sous Xvfb
 
 Story #17, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-wry`, SHA **`b09111ba1126add30fc92e79842ecae8c57d9414`**
-(`spike/wry/`, captures dans `spike/wry/captures/`, `Cargo.lock` commité). Toutes les mesures du 2026-11-27 ont été faites avec le binaire
-construit depuis ce code source (`cargo build --release` ; les deux commits de la branche ne diffèrent que par la largeur du panneau, voir « Constats »).
+(`spike/wry/`, captures dans `spike/wry/captures/`, `Cargo.lock` commité). Les chiffres de ce document viennent du binaire construit à ce SHA
+(`cargo build --release --locked`) ; les deux commits de la branche (`70a7fe0`, `b09111b`) diffèrent par la largeur du panneau (150 → 300 px), la position/largeur des onglets (150/850 → 300/700), la disposition `--all-visible` (425 → 350) et la couleur de fond du panneau, et `b09111b` ajoute la capture. Les mesures « sans pompe » (critères 2 et 3) viennent d'une variante locale non commitée de `b09111b` (voir « Biais du prototype »).
 Outil : `tools/spike-moteur/measure.sh` (`main` à `da9b69b`). Chaque chiffre vient d'une commande recopiée ci-dessous.
 
 ## Machine et conditions
@@ -19,9 +19,9 @@ Versions : 0.57.3 / 0.37.3 sont les dernières éligibles (≥ 7 jours) selon l'
 Le build contre WebKitGTK 2.54.3 **réussit** (point « non vérifié » de l'arbitrage : levé).
 
 Le prototype (`src/main.rs`, ~70 lignes) : une fenêtre tao 1000×600, `gtk::init()` avant les vues, HTML en ligne (`with_html`, aucune URL réseau),
-une vue « panneau » (300 px, fond jaune) plus `--tabs N` vues enfants (`build_as_child`), `with_bounds` ; une seule visible sans `--all-visible`
-(`set_visible(false)` pour les autres). `VIGIE_SPIKE_READY` au premier `PageLoadEvent::Finished` de l'onglet 0 (`println!` + `flush`).
-`--net-settings` : `with_incognito(true)` + `set_enable_dns_prefetching(false)` + `set_enable_hyperlink_auditing(false)` via `WebViewExtUnix::webview()` (réglages de #14).
+une vue « panneau » (300 px, fond jaune) plus `--tabs N` vues enfants (`build_as_child`), `with_bounds` ; panneau et onglet 0 visibles sans `--all-visible`, onglets 1..N-1 masqués
+(`set_visible(false)`). `VIGIE_SPIKE_READY` au premier `PageLoadEvent::Finished` de l'onglet 0 (`println!` + `flush`).
+`--net-settings` : `with_incognito(true)` + `set_enable_dns_prefetching(false)` + `set_enable_hyperlink_auditing(false)` via `WebViewExtUnix::webview()` (réglages de #14), appliqués **après** `build_as_child` : le premier chargement se fait sans ces deux réglages.
 **`--tabs N` crée N vues d'onglet plus le panneau** : « 1 onglet » = 2 vues, « 10 onglets » = 11 vues.
 
 Lancement : `cd spike/wry && cargo build --release`, puis `DISPLAY=:98 measure.sh … -- ./target/release/spike-wry --tabs N` (Xvfb `:98` démarré avant, `run.sh` le fait).
@@ -38,7 +38,7 @@ DISPLAY=:98 measure.sh network --duration 60 -- ./target/release/spike-wry --tab
 **Aucune connexion AF_INET/AF_INET6 observée** : pas de seconde capture nécessaire ; je l'ai faite quand même avec les réglages de #14 : aussi 0.
 Vérification que `strace -f` voit bien tout l'arbre : un essai `strace -f -e trace=connect,execve` montre l'exécution de `WebKitNetworkProcess` et `WebKitWebProcess` (2 de chaque) ; 12 `connect`, tous `AF_UNIX`.
 Limites : **pas de `tcpdump` ni `CAP_NET_RAW`** (décision du board, #13) : on voit les appels `connect`/`sendto`/`sendmsg` des processus, pas les paquets ; un `send()` sur socket déjà connectée n'est pas tracé.
-Page locale seulement : le résultat ne dit rien du trafic d'une vraie page web. Les réglages #14 n'ont donc **aucun effet mesurable ici** (rien à éteindre).
+Page locale seulement : le résultat ne dit rien du trafic d'une vraie page web. Les réglages #14 (appliqués après le 1er chargement) n'ont donc **aucun effet mesurable ici** (rien à éteindre).
 
 ## Critère 2 — démarrage
 
@@ -46,15 +46,17 @@ Page locale seulement : le résultat ne dit rien du trafic d'une vraie page web.
 DISPLAY=:98 measure.sh startup --runs 10 -- ./target/release/spike-wry --tabs 1
 startup_median_ms=310  startup_min_ms=296  startup_max_ms=338
 ```
-Xvfb déjà lancé (hors mesure). Une mesure antérieure sur un binaire à panneau de 150 px : 296 / 284 / 308 ms (mêmes conditions), donc ±5 %.
+Xvfb déjà lancé (hors mesure). Dispersion de ce binaire : 296–338 ms, soit environ ±7 % autour de la médiane.
+**Biais** : ce binaire ajoute `ControlFlow::Poll`, une seconde pompe GTK et `sleep(5 ms)` à chaque événement (`main.rs` l. 62-66). Variante sans ces lignes, même machine, même jour (`--runs 10`) :
+`startup_median_ms=297  startup_min_ms=285  startup_max_ms=298`. Le même binaire `b09111b` remesuré juste après : `310 / 297 / 322`. Pour la comparaison avec CEF (ADR-0004), préférer la variante sans pompe (297 ms) ; l'écart de 13 ms reste du même ordre que la dispersion.
 
 ## Critère 3 — mémoire (RSS total de la session, `--settle 5`)
 
 ```
-measure.sh memory --settle 5 -- ./target/release/spike-wry --tabs 1    → memory_rss_mb=652   (2 vues)
-measure.sh memory --settle 5 -- ./target/release/spike-wry --tabs 10   → memory_rss_mb=2599  (11 vues)
+DISPLAY=:98 measure.sh memory --settle 5 -- ./target/release/spike-wry --tabs 1    → memory_rss_mb=652   (2 vues)
+DISPLAY=:98 measure.sh memory --settle 5 -- ./target/release/spike-wry --tabs 10   → memory_rss_mb=2599  (11 vues)
 ```
-≈ +216 Mo par vue supplémentaire. **Biais** : `measure.sh` additionne les RSS, donc compte plusieurs fois les pages partagées (bibliothèques WebKitGTK/GTK) : valeur haute, pas de PSS.
+≈ +216 Mo par vue supplémentaire (variante sans pompe : 655 puis 2616 Mo, ≈ +218 Mo par vue ; le biais de pompe est donc négligeable ici). **Biais de contexte** : le prototype ne passe pas de `with_web_context`, donc chaque vue crée son propre `WebContext` (`wry-0.57.3/src/webkitgtk/mod.rs` l. 259-269, `Default::default()` ; `new_ephemeral()` par vue en incognito) et lance son propre `WebKitNetworkProcess` (2 pour 2 vues, voir critère 1). Un navigateur réel partagerait le contexte : **ce +216 Mo par vue est une borne haute, non remesurée avec un `WebContext` partagé**. **Biais** : `measure.sh` additionne les RSS, donc compte plusieurs fois les pages partagées (bibliothèques WebKitGTK/GTK) : valeur haute, pas de PSS.
 Les 10 pages étant triviales, un onglet réel pèsera plus.
 
 ## Critère 4 — plusieurs vues web à côté d'un panneau : **OUI**
@@ -67,8 +69,8 @@ Seul `with_bounds` positionne les vues (chaque vue = une fenêtre X11 enfant, `w
 ## Critère 5 — `kill -9` du processus de rendu
 
 Commande : l'hôte (`spike-wry --tabs 1`) tourne ; `kill -9` sur les deux `WebKitWebProcess` (une vue panneau + une vue onglet) ; observation 4 s plus tard.
-- **L'hôte survit** (`ps` : état `Ssl`, toujours vivant), rien sur stderr, aucune fermeture de fenêtre.
-- **Signal reçu par l'hôte : aucun lié à la mort.** Avec `strace -f -e trace=none -e signal=all` : le `SIGCHLD` `CLD_KILLED`/`SIGKILL` du `WebKitWebProcess` arrive à un processus **intermédiaire** (pid 7374, parent des processus WebKit), pas à l'hôte (7221) ; l'hôte ne reçoit que les `SIGCHLD` de ses autres enfants (sortis avec le code 1).
+- **L'hôte survit** (`ps` : état `Sl`, toujours vivant), rien sur stderr, aucune fermeture de fenêtre.
+- **Signal reçu par l'hôte : aucun lié à la mort.** Avec `strace -f -e trace=none -e signal=all` : le `SIGCHLD` `CLD_KILLED`/`SIGKILL` du `WebKitWebProcess` arrive à un processus **intermédiaire** (pid 7374, parent des processus WebKit), pas à l'hôte (7221), **non identifié** (probablement un bac à sable bubblewrap, non vérifié ; dans une autre session, `ps --forest` montre les `WebKit*Process` enfants directs de l'hôte, sans intermédiaire) ; ce document n'a donc pas de section « bac à sable » comparable à `cef.md` ; l'hôte ne reçoit que les `SIGCHLD` de ses autres enfants (sortis avec le code 1).
 - Les `WebKitWebProcess` **ne sont pas relancés** (plus aucun processus de ce nom) ; la dernière image reste à l'écran (pixels inchangés dans la capture). Le prototype n'enregistre pas `web-process-terminated` : le **signal côté API WebKit n'est pas testé**.
 
 ## Critère 6 — `cargo deny`
@@ -89,6 +91,7 @@ Avertissements : 10 `duplicate` (toml_edit, syn, proc-macro-crate, winnow, windo
 ## À retenir pour l'ADR-0004
 
 - **wry sous Linux = X11 uniquement** pour `build_as_child` (doc wry l. 1558-1566, relue par #14) ; ici le test est sous X11, **Wayland non testé**.
-- La boucle tao ne pompe pas GTK : il faut `gtk::main_iteration_do` dans la boucle (comme l'exemple `winit.rs` de wry), sinon pas de rendu ; (non testé sans).
+- **tao pompe déjà GTK** : `tao-0.37.3/src/platform_impl/linux/event_loop.rs` l. 226 (`gtk::init()?`) et l. 1184 (`gtk::main_iteration_do(blocking)`). La pompe ajoutée au prototype est inutile : sans `ControlFlow::Poll`, sans pompe et sans `sleep`, la variante rend le panneau jaune et deux onglets (`--tabs 2 --all-visible`, capture `import -window root`, pixels (100,100) jaune, (400,100) et (800,300) blancs) et émet `VIGIE_SPIKE_READY`. L'exemple `winit.rs` de wry concerne winit, pas tao.
 - `Gdk-CRITICAL _gdk_frame_clock_freeze` écrit une fois sur stderr au démarrage : sans effet visible, cause non cherchée.
+- Non vérifié : `Gdk-CRITICAL` non reproduit à chaque run, signaux reçus par l'hôte non relancés depuis, `cargo deny` non relancé depuis la mesure.
 - Non mesuré : vraie page web, trafic réseau réel, Windows/macOS, PSS mémoire, HiDPI.
