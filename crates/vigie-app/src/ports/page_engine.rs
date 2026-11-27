@@ -104,82 +104,10 @@ pub enum PageEngineError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use vigie_domain::TabStrip;
 
     use super::*;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum EngineCall {
-        CreateView(TabId),
-        Load(TabId, WebUrl),
-        History(TabId, HistoryStep),
-        Reload(TabId),
-        CloseView(TabId),
-    }
-
-    /// Fake en mémoire : mêmes règles d'erreur qu'un vrai moteur.
-    #[derive(Default)]
-    struct FakePageEngine {
-        views: HashSet<TabId>,
-        calls: Vec<EngineCall>,
-        forced: Option<PageEngineError>,
-    }
-
-    impl FakePageEngine {
-        fn fail_next(&mut self, reason: &str) {
-            self.forced = Some(PageEngineError::Engine {
-                reason: reason.to_owned(),
-            });
-        }
-
-        fn record(&mut self, call: EngineCall) -> Result<(), PageEngineError> {
-            self.calls.push(call);
-            self.forced.take().map_or(Ok(()), Err)
-        }
-
-        fn require(&self, tab: TabId) -> Result<(), PageEngineError> {
-            if self.views.contains(&tab) {
-                Ok(())
-            } else {
-                Err(PageEngineError::UnknownView(tab))
-            }
-        }
-    }
-
-    impl PageEngine for FakePageEngine {
-        fn create_view(&mut self, tab: TabId) -> Result<(), PageEngineError> {
-            if self.views.contains(&tab) {
-                return Err(PageEngineError::ViewAlreadyExists(tab));
-            }
-            self.record(EngineCall::CreateView(tab))?;
-            self.views.insert(tab);
-            Ok(())
-        }
-
-        fn load(&mut self, tab: TabId, url: &WebUrl) -> Result<(), PageEngineError> {
-            self.require(tab)?;
-            self.record(EngineCall::Load(tab, url.clone()))
-        }
-
-        fn history(&mut self, tab: TabId, step: HistoryStep) -> Result<(), PageEngineError> {
-            self.require(tab)?;
-            self.record(EngineCall::History(tab, step))
-        }
-
-        fn reload(&mut self, tab: TabId) -> Result<(), PageEngineError> {
-            self.require(tab)?;
-            self.record(EngineCall::Reload(tab))
-        }
-
-        fn close_view(&mut self, tab: TabId) -> Result<(), PageEngineError> {
-            self.require(tab)?;
-            self.record(EngineCall::CloseView(tab))?;
-            self.views.remove(&tab);
-            Ok(())
-        }
-    }
+    use crate::ports::fake_page_engine::{EngineCall, FakePageEngine};
 
     fn url() -> WebUrl {
         WebUrl::parse("https://example.org").unwrap()

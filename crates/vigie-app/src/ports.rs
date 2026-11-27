@@ -32,6 +32,8 @@ pub enum SecretStoreError {
     },
 }
 
+#[cfg(test)]
+pub(crate) mod fake_page_engine;
 pub mod page_engine;
 
 pub use page_engine::{HistoryStep, PageEngine, PageEngineError, PageEvent, PageEventKind};
