@@ -134,6 +134,62 @@ run_guarded() {
   fi
 }
 
+# Réveil : quand le nombre d'issues fermées du dépôt change entre deux ticks (merge ou fermeture
+# à la main), une dépendance a pu être levée. Toutes les mises de côté sont effacées, sauf celle
+# de la planification, qui ne dépend pas des issues fermées. Relevé illisible : rien n'est effacé.
+wake_on_closed_issues() {
+  local count file="$STATE_DIR/closed-issues" f n=0
+  count="$(gh api graphql -f query='query($o: String!, $n: String!) {
+      repository(owner: $o, name: $n) { issues(states: CLOSED) { totalCount } } }' \
+    -f o="${REPO%%/*}" -f n="${REPO#*/}" --jq '.data.repository.issues.totalCount' 2>/dev/null)" || return 0
+  count="${count%$'\r'}"
+  [[ "$count" =~ ^[0-9]+$ ]] || return 0
+  if [ -f "$file" ] && [ "$(cat "$file")" != "$count" ]; then
+    for f in "$STATE_DIR"/stalled-*; do
+      [ -e "$f" ] && [ "$f" != "$STATE_DIR/stalled-plan" ] || continue
+      rm -f "$f"; n=$((n + 1))
+    done
+    [ "$n" = 0 ] || log "issues fermées : $(cat "$file") → $count, $n mise(s) de côté levée(s)"
+  fi
+  echo "$count" >"$file"
+}
+
+# Cibles mises de côté non expirées : « #19, #20 mises de côté jusqu'à 08:00 UTC » (échéance la
+# plus proche), ou rien. La planification apparaît sous ce nom.
+stalled_summary() {
+  local f key ts fp now next="" labels=() s="s"
+  now="$(date -u +%s)"
+  for f in "$STATE_DIR"/stalled-*; do
+    [ -e "$f" ] || continue
+    read -r ts fp <"$f" || continue
+    [[ "$ts" =~ ^[0-9]+$ ]] && [ $(( ts + STALL_HOURS * 3600 )) -gt "$now" ] || continue
+    key="${f##*/stalled-}"
+    if [ "$key" = plan ]; then labels+=("~la planification"); else labels+=("#$key"); fi
+    if [ -z "$next" ] || [ "$ts" -lt "$next" ]; then next="$ts"; fi
+  done
+  [ ${#labels[@]} -gt 0 ] || return 0
+  [ ${#labels[@]} -gt 1 ] || s=""
+  local until=$(( next + STALL_HOURS * 3600 )) when
+  when="$(date -u -d "@$until" +%H:%M)"
+  [ "$(date -u -d "@$until" +%F)" = "$(date -u +%F)" ] || when="demain $when"
+  printf '%s mise%s de côté jusqu'"'"'à %s UTC\n' \
+    "$(printf '%s\n' "${labels[@]}" | sort -t'#' -k2 -n | sed 's/^~//' | paste -sd, - | sed 's/,/, /g')" \
+    "$s" "$when"
+}
+
+# Tick sans travail avec des cibles mises de côté : une notification par changement de la liste.
+notify_idle() {
+  local summary list file="$STATE_DIR/idle-list"
+  summary="$(stalled_summary)"
+  list="${summary%% mise*}"
+  [ "$list" != "$(cat "$file" 2>/dev/null)" ] || return 0
+  printf '%s\n' "$list" >"$file"
+  [ -n "$list" ] || return 0
+  log "la factory est inactive : $summary"
+  notify "La factory est inactive : $summary" default zzz "https://github.com/$REPO/issues" \
+    "Rien à faire pour les agents ; ces cibles seront réessayées à l'échéance, ou dès qu'une issue sera fermée."
+}
+
 # ---------------------------------------------------------------- revue sans fin
 
 # Au MAX_REVIEW_ROUNDS-ième passage d'une PR en status:changes-requested (compté dans sa timeline
@@ -281,6 +337,8 @@ merge_if_green() {
         --body "${closes:-PR #$pr}" 2>&1)"; then
       log "✓ PR #$pr mergée"
       notify "PR #$pr mergée" default white_check_mark "https://github.com/$REPO/pull/$pr" "$title"
+      local issue
+      for issue in $(grep -oE '[0-9]+' <<<"$closes"); do clear_status_labels "$issue"; done
     else
       # Sans approbations ni status:in-review, aucune règle du tick ne reprend la PR : pas de
       # boucle reviewer → gates → refus. status:blocked la laisse au board.
@@ -306,6 +364,18 @@ $(tail -n 60 "$LOG_DIR/gates-pr$pr.log")
     notify "Gates rouges : PR #$pr" high x "https://github.com/$REPO/pull/$pr" \
       "PR renvoyée en changes-requested."
   fi
+}
+
+# Issue fermée par un merge : retire ses labels status:* (sinon elle garde status:in-review).
+clear_status_labels() {
+  local issue="$1" l args=()
+  while read -r l; do
+    l="${l%$'\r'}"
+    [ -z "$l" ] || args+=(--remove-label "$l")
+  done < <(gh issue view "$issue" --repo "$REPO" --json labels \
+    --jq '.labels[].name | select(startswith("status:"))' 2>/dev/null)
+  [ ${#args[@]} -eq 0 ] || gh issue edit "$issue" --repo "$REPO" "${args[@]}" >/dev/null 2>&1 \
+    || log "labels status:* de #$issue non retirés"
 }
 
 notify_weekly_report() {
@@ -349,9 +419,9 @@ heartbeat() {
     --json number --jq 'length' 2>/dev/null || echo '?')"
   open="$(gh pr list --repo "$REPO" --state open --limit 100 --json number --jq 'length' 2>/dev/null || echo '?')"
   [ ! -f "$STATE_DIR/halted" ] || state="en pause"
-  local waiting; waiting="$(board_waiting)"
+  local waiting idle; waiting="$(board_waiting)"; idle="$(stalled_summary)"
   notify "Vigie : signe de vie" min heartpulse "https://github.com/$REPO/pulls" \
-    "Factory $state. Merges (24 h) : $merged. PR ouvertes : $open.${waiting:+ Attend le board : $waiting.}"
+    "Factory $state. Merges (24 h) : $merged. PR ouvertes : $open.${waiting:+ Attend le board : $waiting.}${idle:+ Inactive : $idle.}"
 }
 
 close_finished_epics() {
@@ -380,6 +450,7 @@ sync_main() {
 tick() {
   local n
   sync_main
+  wake_on_closed_issues
   close_finished_epics
 
   if weekly_due; then
@@ -434,6 +505,7 @@ tick() {
 
   log "rien à faire"
   notify_board_waiting
+  notify_idle
 }
 
 main() {
