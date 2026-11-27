@@ -2,7 +2,7 @@
 
 Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`5c7fd0ce81d75dbc3bf6eb81f54ceb4085896c4f`**
 (`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` (revu) `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
-`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage, mémoire et réseau ont été refaites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change) ; l'observation des switches (« Seconde capture ») et un premier essai de `kill -9` viennent de `a8ed63b` ou d'un essai à la main (dits plus bas).
+`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact **non consigné** (`run.sh` n'existe pas à `a8ed63b`, elles ont été lancées avec les variables exportées à la main), ainsi que le premier essai de `kill -9`.
 Xvfb (pid 21406, `:99`) **tournait déjà** pendant les mesures publiées (lancé hors `measure.sh`) ; je n'ai **pas** rejoué à froid (non vérifié : avec l'ancien `run.sh` sans `setsid`, un Xvfb absent aurait été compté dans la session mesurée).
 Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836`). Chaque chiffre vient d'une commande ci-dessous, recopiée.
 
@@ -62,7 +62,8 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
   Une somme **SHA-1** seulement, issue de l'index du même CDN : pas de signature (non vérifié : l'index est-il authentifié ailleurs).
 - `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 18-41), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
   ou si son contenu n'est pas valide (l. 87-108 : `download_to_versioned`).
-- **Build hors réseau : oui, seulement si `CEF_PATH` contient `156.0.31/` et un `archive.json` valide.** `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
+- **Build hors réseau : oui, dans deux cas** (`build.rs` l. 87-108) : `CEF_PATH/156.0.31/cef_linux_x86_64/` existe avec un `archive.json` valide (l. 91-92, 45-53) ; ou `CEF_PATH` à plat (sans `156.0.31/`) contient un `archive.json` valide (l. 99).
+  **Téléchargement** si `CEF_PATH` n'existe pas (l. 107), si `CEF_PATH` à plat est invalide (l. 100), ou si `156.0.31/` existe sans `cef_linux_x86_64/` (`resolve_cef_dir` l. 28-40). `CEF_PATH/156.0.31/` avec un `archive.json` invalide : pas de téléchargement, la build **échoue** (`check_archive`). Testé ici : le premier cas seulement. `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
   `CEF_PATH` (pas `CEF_DOWNLOAD_URL`) : la preuve est donc faite depuis un `target/` **neuf** (`rm -rf` puis `CARGO_TARGET_DIR=/tmp/target-cef-clean`) :
   `CEF_DOWNLOAD_URL=http://127.0.0.1:9 CEF_PATH=/tmp/cefdl cargo build --release --offline` réussit (« Finished `release` profile in 21.23s », `cef-dll-sys` recompilé) ;
   un téléchargement aurait échoué sur le port 9. Je n'ai pas coupé le réseau du noyau (`unshare` refusé) : preuve indirecte.
@@ -86,10 +87,17 @@ Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur
 | 10 | 2 | 2,06 | **257 ms** | 245 ms | 342 ms |
 | 10 | 3 | 3,10 | **313 ms** | 244 ms | 353 ms |
 
-Une première passe (même jour, charge ~1,3, avant ces séries) avait donné 162 ms (1 vue) et 232-244 ms (10 vues) ; elle n'est pas gardée (charge non relevée série par série).
-**Écart avec la revue** : le reviewer a mesuré 203-221 ms (médianes, 1 vue) avec le binaire de `a8ed63b`, dans le même conteneur. Je n'ai pas élucidé les ~30-40 ms d'écart
-(hypothèse non testée : charge ou état du cache disque à ce moment-là, dont je n'ai pas la mesure). Lecture honnête : **ordre de 160-220 ms pour 1 vue, 244-353 ms pour 10 vues**,
-selon la charge de la machine ; la plage « 150-180 ms » annoncée d'abord était trop étroite.
+Mesures de la revue, même conteneur, binaire de `5c7fd0c`, Xvfb déjà lancé, commande `bash tools/spike-moteur/measure.sh startup --runs N --timeout 60 -- spike/cef/run.sh --tabs T` :
+
+| charge (1 min) | runs | 1 vue : médiane (min-max) | 10 vues : médiane (min-max) |
+|---|---|---|---|
+| 0,57 | 3 | 229 (213-268) ms | 376 (340-459) ms |
+| 1,21 | 5 | 257 (247-286) ms | 336 (311-362) ms |
+| 1,21 | 5 | 203 (199-230) ms | 397 (322-421) ms |
+
+Autres mesures de la revue au SHA `1325dd1` : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
+**Lecture honnête : la médiane varie d'une session à l'autre, d'environ 160 à 260 ms pour 1 vue et d'environ 255 à 400 ms pour 10 vues.** La charge ne l'explique pas : les séries de la revue ont une charge plus basse (0,57-1,21) que les miennes (1,7-3,1) et sont plus lentes. Cause **non vérifiée**.
+Pour l'ADR : la variance entre sessions est du même ordre que l'écart entre 1 et 10 vues.
 
 Rejouer : `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs 1` (depuis la racine du dépôt, `run.sh` pris sur `spike/moteur-cef`).
 Avec 10 vues, `VIGIE_SPIKE_READY` sort à la **première** page chargée : les 9 autres ne sont pas attendues.
@@ -109,7 +117,7 @@ la mémoire réellement consommée. Pas de PSS mesuré (non fait). Écart 1 → 
 ## Critère 1 — réseau, page locale, sans URL
 
 Commande : `rm -rf /tmp/vigie-spike-cef` (cache vidé avant chaque capture), puis `measure.sh network --duration 60 --timeout 90 -- spike/cef/run.sh --tabs 1` (`strace -f`, `connect/sendto/sendmsg/sendmmsg`).
-Convention de comptage : **destinations = lignes `network_dest`, DNS du conteneur `127.0.0.11:53` inclus**. Deux captures par cas, la première ci-dessous.
+Convention de comptage : **destinations = lignes `network_dest`, DNS du conteneur `127.0.0.11:53` inclus**. Deux captures par cas (A1, A2 sans switches ; B1, B2 avec), la première de chaque cas ci-dessous. **Toutes sont un premier lancement (profil vide)** : le démarrage ci-dessus est mesuré cache chaud, le trafic d'un lancement avec profil existant n'est pas capturé.
 **CEF émet du trafic réseau tout seul**, alors que la page est un `data:` :
 
 ```
@@ -124,15 +132,15 @@ network_dest=34.104.35.123:80
 network_dest=[2001:4860:4860::8888]:443
 ```
 
-(`127.0.0.11:53` est le DNS du conteneur.) Seconde capture sans switches : 27 appels, mêmes 8 destinations, sauf `192.178.204.113` au lieu de `192.178.204.139`.
+(`127.0.0.11:53` est le DNS du conteneur.) A2 (sans switches) : 27 appels, mêmes 8 destinations, sauf `192.178.204.113` au lieu de `192.178.204.139`.
 Les IP d'une famille changent d'une capture à l'autre (DNS, répartition de charge) ; les ports et les ensembles restent stables.
 
 Les noms de domaine n'ont pas pu être relevés : les requêtes DNS passent par des sockets UDP déjà connectées (`send` sans adresse), limite connue de
 `measure.sh`, et un `strace -e trace=send,sendmsg` n'a pas montré les noms. **Je ne les attribue pas** : `2001:4860:4860::8888` est une adresse Google Public DNS
-(connaissance générale, non vérifiée ici) ; le reste est non identifié. Les `connect` observés à la seconde capture viennent d'un seul identifiant de thread/processus
+(connaissance générale, non vérifiée ici) ; le reste est non identifié. Les `connect` observés en A2 viennent d'un seul identifiant de thread/processus
 (`-f` trace les threads) ; le processus exécuté de `--type=utility` (`network.mojom.NetworkService`) a un autre PID : le lien est **probable, non prouvé**.
 
-**Seconde capture, avec switches.** #14 n'a pas établi de noms de switches (« non vérifié », `docs/knowledge/LOG.md`, Q3). J'ai donc pris des noms
+**Captures B (avec switches).** #14 n'a pas établi de noms de switches (« non vérifié », `docs/knowledge/LOG.md`, Q3). J'ai donc pris des noms
 connus de Chromium et vérifié seulement qu'ils sont des chaînes présentes dans `libcef.so` (`grep -c -a -F -- <nom> libcef.so` ≥ 1 pour chacun) : ce n'est **pas** une preuve de leur effet.
 `VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run`
 exportée avant `run.sh`. **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par la revue : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
@@ -147,7 +155,7 @@ network_dest=34.104.35.123:80
 network_dest=[2001:4860:4860::8888]:443
 ```
 
-Seconde capture avec switches : 18 appels, mêmes 6 destinations.
+B2 : 18 appels, mêmes 6 destinations.
 
 **Résultat : ces switches réduisent (26-27 → 17-18 appels, 8 → 6 destinations, 2 captures par cas) mais ne suppriment pas le trafic.** Les deux destinations `192.178.204.x:443` et `213.44.21.206:443` disparaissent dans les deux captures avec switches ; variance au-delà de 2 captures non mesurée. Il reste des connexions que je n'ai pas
 su attribuer. Pour l'ADR (#20) : « zéro requête au démarrage » n'est **pas** acquis avec CEF 156 ; il faut une story dédiée (journaux `--log-net-log`
@@ -166,7 +174,7 @@ Condition établie par l'essai : avec le style par défaut (Chrome) pour les **v
 « Alloy style Windows with the Views framework can host only Alloy style BrowserViews but Chrome style Windows can host both style BrowserViews. Additionally, a Chrome style
 Window can host at most one Chrome style BrowserView but potentially multiple Alloy style BrowserViews. »
 **Le style de la fenêtre n'a donc pas besoin d'être Alloy.** Testé (`VIGIE_SPIKE_WINDOW_STYLE=chrome spike/cef/run.sh --tabs 2`, capture `spike/cef/captures/multiview-2tabs-chrome-window.png`) :
-fenêtre en style Chrome + 2 vues Alloy, les deux pages s'affichent, aucune erreur `Cannot add multiple` dans la sortie. Ce que je n'ai pas observé : aucune barre d'outils Chrome n'est visible sur la capture (cause non établie ; pas de gestionnaire de fenêtres sous Xvfb) ; l'apport réel du style Chrome pour la fenêtre (UI, extensions) n'est donc pas évalué. Sans flex, les vues gardent leur taille préférée (100×100) : il faut `set_flex_for_view` et
+fenêtre en style Chrome + 2 vues Alloy, les deux pages s'affichent, aucune erreur `Cannot add multiple` dans la sortie. Ce que je n'ai pas observé : **le panneau de 150 px n'est pas visible** sur cette capture (x 0-150 blanc, indiscernable des vues ; il est gris avec une fenêtre Alloy), cause non établie : le critère « panneau + 2 vues » n'est donc démontré qu'avec une fenêtre Alloy ; aucune barre d'outils Chrome n'est visible non plus (cause non établie ; pas de gestionnaire de fenêtres sous Xvfb) ; l'apport réel du style Chrome pour la fenêtre (UI, extensions) n'est donc pas évalué. Sans flex, les vues gardent leur taille préférée (100×100) : il faut `set_flex_for_view` et
 `cross_axis_alignment = STRETCH`. Testé avec 2 vues (visuel, fenêtre Alloy et fenêtre Chrome) et 10 vues (démarrage, mémoire, fenêtre Alloy) ; pas de capture à 10 vues.
 
 Couleur du panneau : hypothèse de la revue (`cef-dll-sys` bindings l. 32590 : « background color will be automatically reset when OnThemeChanged is called » ;
@@ -196,4 +204,6 @@ plusieurs vues partageant un rendu.
 - Noms de domaine contactés ; effet réel de chaque switch ; processus à l'origine des connexions.
 - `cargo deny` sur le projet (repris de l'architecte, non relancé).
 - Autre machine que ce conteneur WSL2 ; Wayland (CEF Views sous X11 seulement ici).
-- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; écart de démarrage avec la revue (203-221 ms contre 174-175 ms ; la revue a ensuite mesuré 161-162 ms le même jour, ce qui renforce l'hypothèse « charge »).
+- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (160-260 ms pour 1 vue, charge exclue comme explication simple).
+- Trafic réseau avec un profil existant : les captures sont un premier lancement (profil vide).
+- Panneau invisible avec une fenêtre Chrome (cause non établie).
