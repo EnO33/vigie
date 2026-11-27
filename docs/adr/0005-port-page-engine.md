@@ -40,9 +40,10 @@ pub trait PageEngine {
     fn create_view(&mut self, tab: TabId) -> Result<(), PageEngineError>;
     fn load(&mut self, tab: TabId, url: &WebUrl) -> Result<(), PageEngineError>;
     fn history(&mut self, tab: TabId, step: HistoryStep) -> Result<(), PageEngineError>;
+    fn reload(&mut self, tab: TabId) -> Result<(), PageEngineError>;
     fn close_view(&mut self, tab: TabId) -> Result<(), PageEngineError>;
 }
-pub enum HistoryStep { Back, Forward, Reload }
+pub enum HistoryStep { Back, Forward }
 ```
 
 Tout appel a lieu sur le thread principal (GTK l'exige, F9). Pas d'async, pas de canal dans `vigie-app`.
@@ -52,7 +53,7 @@ premier chargement (F4) et pour mesurer le lancement sans URL.
 ### 2. Événements poussés vers un puits, relayés par la boucle du shell
 
 L'adaptateur reçoit à sa construction un puits `Rc<dyn Fn(PageEvent)>` (un clone par rappel :
-les rappels wry/GTK sont `Fn + 'static` sans `Send`, `wry-0.57.3/src/lib.rs` l. 1309-1450). Les rappels y
+les rappels wry/GTK sont `Fn`/`FnMut + 'static` sans `Send`, `wry-0.57.3/src/lib.rs` l. 1309-1450, `with_download_started_handler` l. 1364 est `FnMut`). Les rappels y
 traduisent chaque signal en `PageEvent { tab: TabId, kind: PageEventKind }` :
 `LoadStarted`, `LoadFinished`, `TitleChanged(PageTitle)`, `UrlChanged(WebUrl)`, `RendererLost`,
 `NewWindowRequested(Option<WebUrl>)`, `ViewClosed`. Un événement dont le `TabId` est inconnu (vue déjà fermée) est ignoré. Il n'existe pas de `LoadFailed` dans cet epic : une erreur TLS ressemble à un `LoadFinished`. Le shell branche ce puits sur `EventLoopProxy::send_event`
@@ -69,7 +70,7 @@ plus et ne simplifie rien. Autre alternative écartée : un port qui renvoie des
 `with_on_page_load_handler` est **interdit** : il fait `webview.uri().unwrap()` dans un rappel GTK
 (`wry-0.57.3/src/webkitgtk/mod.rs` l. 491, 494), une panique à travers la FFI abandonne le processus.
 Tous les signaux sont des `connect_*` posés directement sur `WebViewExtUnix::webview()` (cadre
-principal seulement) ; le builder wry ne sert qu'aux réglages. `LoadStarted` et `LoadFinished` viennent
+principal seulement) ; le builder wry sert aux réglages, avec trois exceptions nommées : `with_navigation_handler` (décision 4), `with_download_started_handler` et `with_new_window_req_handler` (décision 5), faute de signal équivalent plus simple ; #49 évalue leur remplacement par `connect_decide_policy`/`connect_create`. `LoadStarted` et `LoadFinished` viennent
 de `connect_load_changed` (`webkit2gtk-2.0.2/src/auto/web_view.rs` l. 2287), `TitleChanged` de
 `connect_title_notify` (l. 3206).
 
@@ -112,17 +113,22 @@ et un test unitaire vérifie une struct de configuration de l'adaptateur (`WebVi
   `WebViewExtUnix::webview()`, puis `load_url` (F4). Ces deux réglages sont dépréciés : l'effet sur
   2.54.3 est à mesurer (un `<a ping>` part-il ?) dans #51 ;
 - `with_new_window_req_handler` renvoie toujours `NewWindowResponse::Deny` et émet
-  `NewWindowRequested` (F7 ; `Allow` contient 5 `unwrap`, ADR-0004) ;
-- `connect_web_process_terminated` émet `RendererLost` (F3) ; aucun rechargement automatique
-  (pas de boucle de crash), le cas d'usage expose `HistoryStep::Reload` ;
+  `NewWindowRequested` (F7 ; `Allow` contient 5 `unwrap`, ADR-0004). Il n'est pas toujours appelé :
+  wry sort par `?` quand la requête n'a pas d'URI (`webkitgtk/mod.rs` l. 504-507), donc aucun
+  événement dans ce cas ; les tests de la story le couvrent ;
+- `connect_web_process_terminated` émet `RendererLost` pour `Crashed` et `ExceededMemoryLimit` ; `TerminatedByApi` (`webkit2gtk-2.0.2/src/auto/enums.rs` l. 4365) est demandé par l'application, il n'émet rien : à confirmer en story (F3) ; aucun rechargement automatique
+  (pas de boucle de crash), le cas d'usage expose `reload` (qui n'est pas un pas d'historique) ;
 - `window.close()` : wry pose toujours `connect_close(|webview| unsafe { webview.destroy() })`
   (`webkitgtk/mod.rs` l. 474), sans option. Une page hostile détruirait la vue sans événement et l'app
   croirait l'onglet vivant. L'adaptateur pose donc son propre `connect_close`/`connect_destroy` sur
   `webview()` qui émet `ViewClosed` et **oublie** la vue ; toute commande suivante sur ce `TabId`
   renvoie une `PageEngineError` typée (`UnknownView`), jamais une panique. L'effet réel (ordre des
-  gestionnaires wry/adaptateur, destruction effective) est **non vérifié**.
+  gestionnaires wry/adaptateur, destruction effective) est **non vérifié**. `Drop for InnerWebView`
+  appelle `destroy()` de façon synchrone (`webkitgtk/mod.rs` l. 100-104) : `close_view` retire la
+  vue de l'état de l'adaptateur, **relâche l'emprunt**, puis la drop ; le gestionnaire `destroy`
+  supporte une vue déjà absente (pas de `borrow_mut` pendant le drop) et n'émet `ViewClosed` qu'une fois.
 
-Dépendances de l'adaptateur, épinglées exactement pour éviter les doublons (wry épingle `webkit2gtk =2.0.2`, `webkit2gtk-sys =2.0.2` et `javascriptcore-rs =1.1.2`, `wry-0.57.3/Cargo.toml` l. 208-209, 225-226 ; `gtk` et `gdkx11` sont en `"0.18"`, F2) :
+Dépendances de l'adaptateur, épinglées exactement pour figer les versions directes (wry épingle `webkit2gtk =2.0.2`, `webkit2gtk-sys =2.0.2` et `javascriptcore-rs =1.1.2`, `wry-0.57.3/Cargo.toml` l. 208-209, 225-226 ; `gtk` et `gdkx11` sont en `"0.18"`, F2). L'épinglage n'évite **pas** les doublons transitifs de wry/gtk (voir Conséquences, issue #53) :
 `wry = "=0.57.3"`, `webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }`, `gtk = "=0.18.2"`,
 `gdkx11 = "=0.18.2"`. L'adaptateur est générique sur `wry::raw_window_handle::HasWindowHandle`
 (réexporté, `wry-0.57.3/src/lib.rs` l. 373) : `tao = "=0.37.3"` n'est une dépendance que de `vigie-shell`.
@@ -149,20 +155,32 @@ qui permet de construire `WryPageEngine` : on ne peut pas oublier la vérificati
   et `.cargo/` est protégé. Stratégie : issue `type:chore` `area:factory` au board pour exclure la colle
   de l'adaptateur de la mutation ou lancer cette étape sous `xvfb-run` ; l'alternative
   `#[mutants::skip]` demande d'ajouter le crate `mutants` (liste blanche, `check-versions`) et n'est pas
-  retenue sans accord du board. Les stories de l'adaptateur sont bloquées par cette issue.
+  retenue sans accord du board. Les stories de l'adaptateur sont bloquées par #52.
+- Les tests qui demandent GTK n'ont pas de parent `HasWindowHandle` : gtk 0.18.2 ne l'implémente pas,
+  `WindowHandle::borrow_raw` est `unsafe` (raw-window-handle 0.6.2 `borrowed.rs` l. 247) et
+  `unsafe_code = "forbid"`. La story choisit `tao` en dev-dependency de l'adaptateur ou
+  `WebViewBuilderExtUnix::build_gtk` (`wry-0.57.3/src/lib.rs` l. 2041) sur un `gtk::Window`.
 - Les tests qui demandent GTK (backend x11 forcé avant tout scénario) vivent dans **une** cible `tests/x11.rs` avec `harness = false` (donc sans `cfg(test)`, les tolérances de `clippy.toml` ne s'appliquent probablement pas au `main`, non vérifié : il rend un `ExitCode`, sans `unwrap`) : un
   seul `main`, scénarios en séquence sur le thread principal (F9 interdit `gtk::init` depuis les
-  threads du harnais). Sans `DISPLAY`, la cible vérifie seulement le chemin « pas de display →
-  `EnvironmentError` » ; si `VIGIE_REQUIRE_X11=1` et pas de display, elle échoue.
+  threads du harnais). Les scénarios complets ne tournent que si `VIGIE_REQUIRE_X11=1` (sinon `cargo test`, la
+  couverture et la mutation varieraient avec un `DISPLAY` hérité, ex. WSLg) ; sans cette variable, la
+  cible vérifie seulement le chemin « pas de display → `EnvironmentError` » ; avec la variable et sans
+  display, elle échoue.
 - `tools/engine/x11_test.sh` lance `VIGIE_REQUIRE_X11=1 xvfb-run -a cargo test --locked --all-features -p vigie-adapter-wry --test x11`.
-  Son nom le fait passer dans l'étape « outils » des gates (F11) : aucun fichier protégé à modifier **pour les tests** ; la mutation, elle, demande l'issue board ci-dessus.
+  Son nom le fait passer dans l'étape « outils » des gates (F11) : aucun fichier protégé à modifier **pour les tests** ; la mutation, elle, demande l'issue board #52.
 - La mesure réseau (60 s, `strace -f`) reste un script versionné lancé à la main
   (`tools/engine/`, via `tools/spike-moteur/measure.sh network`) : 60 s par passe et l'accès au web
   réel ne conviennent pas aux gates.
 
 ## Conséquences
 
-- `vigie-app` dépend de `vigie-domain` (autorisé, ADR-0001) ; aucune liste blanche ne change.
+- `vigie-app` dépend de `vigie-domain` (autorisé, ADR-0001) ; la liste blanche de dépendances ne change pas.
+- **Lints.** `multiple_crate_versions = "warn"` (`Cargo.toml` l. 39) hérité par chaque crate, avec
+  `clippy ... -- -D warnings` (`factory/gates.sh` l. 107) : les doublons transitifs de wry/gtk
+  (relevé du reviewer : bitflags, syn, thiserror, proc-macro-crate, toml_edit, toml_datetime, winnow,
+  jni-sys, windows-sys ; 10 erreurs, non rejoué par l'auteur) rendent les gates `lints` rouges dès
+  l'arrivée de l'adaptateur. Il faut `allowed-duplicate-crates` (`clippy.toml`, protégé) ou un
+  assouplissement du lint : issue board #53. Les stories de l'adaptateur sont bloquées par #52 et #53.
 - Le domaine gagne `PageTitle`, et un onglet peut être vide (`Tab::url() -> Option<&WebUrl>`).
 - `cargo deny` passe aujourd'hui (F10) ; si une mise à jour de la base d'avis fait remonter
   RUSTSEC-2024-0429, la levée passe par le board (`deny.toml` protégé).
