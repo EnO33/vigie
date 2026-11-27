@@ -62,6 +62,8 @@ case "$*" in
       echo "GraphQL: Pull request is not mergeable (mergePullRequest) jeton ghp_FAKEtoken1234567890abcdef" >&2
       exit 1
     fi ;;
+  *"issue view"*"--json labels"*) printf 'status:in-review\n' ;;  # labels status:* de l'issue fermée
+  "issue edit"*) echo "$*" >>"$FAKE/issue-edits" ;;
   *"issue list"*"--label area:factory"*)  # issues JSON : le filtre --jq de l'orchestrateur s'applique
     jq -r "$(arg_after --jq "$@")" "$FAKE/wait-factory.json" 2>/dev/null ;;
   *"issue list"*"--label board"*) cat "$FAKE/wait-board" 2>/dev/null ;;
@@ -160,6 +162,9 @@ printf '#!/usr/bin/env bash\necho x >>"$FAKE/gates-runs"\nexit "${FAKE_GATES_RC:
 reset; merge_if_green 7 >/dev/null
 expect "PR mergée : une notification" 1 "$(calls)"
 has_header 1 "Click: https://github.com/test/vigie/pull/7" && ok "PR mergée : lien vers la PR" || ko "PR mergée : lien"
+grep -qF -- "issue edit 2 --repo test/vigie --remove-label status:in-review" "$FAKE/issue-edits" 2>/dev/null \
+  && ok "PR mergée : labels status:* retirés de l'issue fermée (#2)" \
+  || ko "PR mergée : labels status:* de #2 non retirés (« $(cat "$FAKE/issue-edits" 2>/dev/null) »)"
 
 # --- merge refusé par GitHub : bloquée, commentée, notifiée, et pas reprise au tick suivant
 reset; printf '%s\n' status:in-review review:approved security:approved >"$FAKE/labels.7"
@@ -176,6 +181,7 @@ case "$(cat "$FAKE/comment")" in *"not mergeable"*) ok "commentaire : sortie de 
 if grep -q ghp_FAKEtoken "$FAKE/comment"; then ko "commentaire : jeton GitHub non masqué"
 else ok "commentaire : jeton GitHub masqué"; fi
 expect "merge refusé : une notification" 1 "$(calls)"
+[ ! -s "$FAKE/issue-edits" ] && ok "merge refusé : labels de l'issue intacts" || ko "merge refusé : labels de l'issue modifiés"
 has_header 1 "Title: Merge refusé : PR #7" && has_header 1 "Priority: high" \
   && has_header 1 "Click: https://github.com/test/vigie/pull/7" \
   && ok "merge refusé : titre, high, lien" || ko "merge refusé : en-têtes"

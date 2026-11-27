@@ -20,6 +20,7 @@ expr="$(arg_after --jq "$@")"; expr="${expr:-.}"
 all() { cat "$FAKE"/issues/*.json 2>/dev/null | jq -s .; }
 path=""; for a in "$@"; do case "$a" in repos/*) path="${a%%\?*}"; break ;; esac; done
 case "$1 $2" in
+  "api graphql") cat "$FAKE/closed-count" ;;  # nombre d'issues fermées (--jq du vrai gh appliqué)
   "api "*)
     case "$path" in
       */timeline) n="${path%/timeline}"; jq -r "$expr" "$FAKE/timeline-${n##*/}.json" 2>/dev/null ;;
@@ -85,7 +86,7 @@ set +e
 sync_main() { :; }
 close_finished_epics() { :; }
 weekly_due() { return 1; }
-notify() { echo "$1" >>"$FAKE/notifs"; }
+notify() { echo "$1 | ${5:-}" >>"$FAKE/notifs"; }  # titre | message
 
 expect() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 : « $3 », attendu « $2 »"; failures=$((failures + 1)); fi; }
 runs() { paste -sd, "$FAKE/runs" 2>/dev/null; }
@@ -97,7 +98,8 @@ echo none >"$FAKE/effect"
 for _ in 1 2 3 4; do tick >/dev/null 2>&1; done
 expect "4 ticks sans effet : #23, puis #30, puis la planification, puis plus rien" \
   "developer 23,developer 30,product-owner plan" "$(runs)"
-expect "une notification par cible mise de côté" 3 "$(notifs)"
+expect "une notification « sans effet » par cible mise de côté" 3 "$(grep -c 'sans effet' "$FAKE/notifs")"
+grep -q "^La factory est inactive" "$FAKE/notifs" && echo "ok   4e tick sans travail : notification « inactive »" \n  || { echo "FAIL 4e tick sans travail : pas de notification « inactive »"; failures=$((failures + 1)); }
 grep -q "Agent developer sans effet sur #23" "$FAKE/notifs" && echo "ok   notification nommant l'agent et la cible" \
   || { echo "FAIL notification sans agent ni cible"; failures=$((failures + 1)); }
 
@@ -156,6 +158,39 @@ reset_runs
 tick >/dev/null 2>&1
 case "$(runs)" in *"developer 40"*) echo "FAIL PR bloquée reprise au tick suivant"; failures=$((failures + 1)) ;;
   *) echo "ok   PR bloquée : pas reprise au tick suivant" ;; esac
+
+# --- réveil : une issue fermée (merge ou à la main) lève les mises de côté, sauf « plan »
+stall_now() { local k; for k in "$@"; do echo "$(date -u +%s) x" >"$STATE_DIR/stalled-$k"; done; }
+stalled_keys() { ls "$STATE_DIR" | sed -n 's/^stalled-//p' | sort | paste -sd' ' -; }
+rm -f "$STATE_DIR"/stalled-* "$STATE_DIR/closed-issues"
+stall_now 19 20 plan
+echo 12 >"$FAKE/closed-count"; wake_on_closed_issues
+expect "premier relevé : rien d'effacé" "19 20 plan" "$(stalled_keys)"
+wake_on_closed_issues
+expect "même nombre d'issues fermées : rien d'effacé" "19 20 plan" "$(stalled_keys)"
+echo 13 >"$FAKE/closed-count"; wake_on_closed_issues
+expect "une issue fermée de plus : mises de côté levées, sauf « plan »" "plan" "$(stalled_keys)"
+echo erreur >"$FAKE/closed-count"; stall_now 19; wake_on_closed_issues
+expect "relevé illisible : rien d'effacé" "19 plan" "$(stalled_keys)"
+
+# --- factory inactive : une notification par changement de la liste des mises de côté
+rm -f "$FAKE/notifs" "$STATE_DIR"/stalled-* "$STATE_DIR/idle-list"
+stall_now 20 19
+notify_idle; notify_idle
+expect "inactive : une seule notification pour la même liste" 1 "$(notifs)"
+grep -qE "^La factory est inactive : #19, #20 mises de côté jusqu'à (demain )?[0-9]{2}:[0-9]{2} UTC" "$FAKE/notifs" \
+  && echo "ok   inactive : « #19, #20 mises de côté jusqu'à HH:MM UTC »" \
+  || { echo "FAIL inactive : titre « $(head -n 1 "$FAKE/notifs") »"; failures=$((failures + 1)); }
+stall_now 23; notify_idle
+expect "inactive : nouvelle notification quand la liste change" 2 "$(notifs)"
+for k in 19 20 23; do echo "$(( $(date -u +%s) - 25 * 3600 )) x" >"$STATE_DIR/stalled-$k"; done
+notify_idle
+expect "inactive : mises de côté expirées, liste vide, aucune notification" 2 "$(notifs)"
+rm -f "$FAKE/notifs" "$STATE_DIR/last-heartbeat"; stall_now 19
+heartbeat
+grep -qE "Inactive : #19 mise de côté jusqu'à (demain )?[0-9]{2}:[0-9]{2} UTC" "$FAKE/notifs" \
+  && echo "ok   signe de vie : mises de côté" \
+  || { echo "FAIL signe de vie : « $(cat "$FAKE/notifs") »"; failures=$((failures + 1)); }
 
 echo
 if [ "$failures" -eq 0 ]; then echo "✓ garde-fou sans effet : tous les tests passent"
