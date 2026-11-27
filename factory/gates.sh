@@ -80,6 +80,20 @@ merge_base() {
   echo "fusion locale avec $BASE_REF : $(git rev-parse --short HEAD) (jamais poussée)"
 }
 
+# Tests des outils du produit (tools/*_test.sh suivis par git), lancés depuis le répertoire
+# courant : ceux de la PR en mode --pr. GATES_SKIP_TOOL_TESTS=1 les saute en --local seulement ;
+# le chemin --pr retire la variable (env -u).
+run_tool_tests() {
+  local t
+  if [ "${GATES_SKIP_TOOL_TESTS:-0}" = 1 ]; then
+    echo "tests d'outils ignorés (GATES_SKIP_TOOL_TESTS=1)"; return 0
+  fi
+  for t in $(git ls-files -- 'tools/*_test.sh'); do
+    echo "· $t"
+    bash "$t"
+  done
+}
+
 run_gates() {
   # Tests de l'outillage : depuis FACTORY_DIR. check-modes.sh, lui, vérifie l'index du répertoire
   # courant (le worktree de la PR en mode --pr).
@@ -92,6 +106,7 @@ run_gates() {
   step "format";        cargo fmt --all --check
   step "lints";         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   step "tests";         cargo test --workspace --all-features --locked
+  step "outils";        run_tool_tests
   step "architecture";  cargo xtask arch
   step "supply chain";  cargo deny check
   step "couverture";    cargo llvm-cov --workspace --exclude xtask --all-features --locked \
@@ -136,7 +151,8 @@ case "${1:-}" in
     sha="$(git rev-parse HEAD)"
     pr_text="$(gh pr view "$pr" --json title,body --jq '.title + "\n" + .body')"
     post_status "$sha" pending "gates en cours"
-    if GATES_PR_TEXT="$pr_text" GATES_PATTERNS="$PATTERNS" bash "$SELF" --checks; then
+    if env -u GATES_SKIP_TOOL_TESTS GATES_PR_TEXT="$pr_text" GATES_PATTERNS="$PATTERNS" \
+        bash "$SELF" --checks; then
       post_status "$sha" success "tous les gates sont verts"
       echo "✓ gates verts sur $sha"
     else
