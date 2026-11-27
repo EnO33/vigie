@@ -7,9 +7,17 @@ use std::fmt;
 ///
 /// Ne se construit que via [`PageTitle::parse`].
 ///
-/// Les caractères de contrôle bidirectionnels (catégorie Cf : `U+202A..=U+202E`,
-/// `U+2066..=U+2069`, `U+200E`, `U+200F`, `U+061C`) ne sont pas `is_control` mais sont
-/// **retirés** : ils permettent d'inverser l'affichage d'un titre pour usurper un site.
+/// Des caractères de catégorie Cf, non `is_control`, sont **retirés** :
+/// - contrôles bidirectionnels (`U+202A..=U+202E`, `U+2066..=U+2069`, `U+200E`, `U+200F`,
+///   `U+061C`) : ils inversent l'affichage pour usurper un site ;
+/// - invisibles (`U+00AD`, `U+180E`, `U+200B`, `U+2060..=U+2064`, `U+206A..=U+206F`,
+///   `U+FEFF`, `U+FFF9..=U+FFFB`) : `Pay\u{200B}Pal` s'afficherait « `PayPal` » ;
+/// - Tags (`U+E0000..=U+E007F`) : un LLM les lit comme de l'ASCII, l'utilisateur ne les voit
+///   pas (injection de prompt cachée). Conséquence assumée : les drapeaux de subdivision
+///   (🏴 Écosse…) perdent leur suite et s'affichent en drapeau noir simple.
+///
+/// `U+200C` (ZWNJ) et `U+200D` (ZWJ) sont **conservés** : ils sont nécessaires au persan
+/// et aux séquences emoji.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageTitle(String);
 
@@ -21,8 +29,21 @@ pub enum PageTitleError {
     Empty,
 }
 
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+fn is_hidden_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'
+            | '\u{200E}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
 }
 
 impl PageTitle {
@@ -32,7 +53,7 @@ impl PageTitle {
     /// Nettoie et borne un titre brut.
     ///
     /// Les blancs (dont `\n`, `\t`) deviennent un espace unique ; les autres contrôles
-    /// et les contrôles bidi sont retirés ; troncature à [`Self::MAX_CHARS`] `char`.
+    /// et les invisibles (bidi, Tags, ZWSP…) sont retirés ; troncature à [`Self::MAX_CHARS`] `char`.
     ///
     /// # Errors
     ///
@@ -40,7 +61,7 @@ impl PageTitle {
     pub fn parse(raw: &str) -> Result<Self, PageTitleError> {
         let kept: String = raw
             .chars()
-            .filter(|c| c.is_whitespace() || !(c.is_control() || is_bidi_control(*c)))
+            .filter(|c| c.is_whitespace() || !(c.is_control() || is_hidden_format(*c)))
             .collect();
         let joined = kept.split_whitespace().collect::<Vec<_>>().join(" ");
         let truncated: String = joined.chars().take(Self::MAX_CHARS).collect();
@@ -116,10 +137,48 @@ mod tests {
     }
 
     #[test]
+    fn hidden_format_families_are_removed() {
+        for (raw, want) in [
+            ("Banque\u{E0069}\u{E0067}\u{E0020}", "Banque"),
+            ("Pay\u{200B}Pal", "PayPal"),
+            ("a\u{FEFF}\u{2060}b", "ab"),
+            ("a\u{00AD}b", "ab"),
+            ("x\u{FFF9}y", "xy"),
+        ] {
+            let t = PageTitle::parse(raw);
+            assert_eq!(t.as_ref().map(PageTitle::as_str), Ok(want), "{raw:?}");
+        }
+        assert_eq!(PageTitle::parse("\u{E0041}"), Err(PageTitleError::Empty));
+        assert_eq!(PageTitle::parse("\u{200B}"), Err(PageTitleError::Empty));
+    }
+
+    #[test]
+    fn zwj_and_zwnj_are_kept() {
+        let t = PageTitle::parse("a\u{200D}b\u{200C}c");
+        assert_eq!(t.as_ref().map(PageTitle::as_str), Ok("a\u{200D}b\u{200C}c"));
+    }
+
+    #[test]
     fn invariants_hold_on_sample() {
         let atoms = [
-            "", " ", "a", "é", "\n", "\t", "\u{0}", "\u{7}", "\u{202E}", "\u{2066}", "\u{a0}",
-            "\u{3000}", "😀", "x y",
+            "",
+            " ",
+            "a",
+            "é",
+            "\n",
+            "\t",
+            "\u{0}",
+            "\u{7}",
+            "\u{202E}",
+            "\u{2066}",
+            "\u{E0041}",
+            "\u{200B}",
+            "\u{FEFF}",
+            "\u{200D}",
+            "\u{a0}",
+            "\u{3000}",
+            "😀",
+            "x y",
         ];
         let mut samples = vec!["é".repeat(600), format!("{} b", "a".repeat(511))];
         for a in atoms {
@@ -133,7 +192,9 @@ mod tests {
         for raw in &samples {
             if let Ok(t) = PageTitle::parse(raw) {
                 let s = t.as_str();
-                assert!(!s.chars().any(|c| c.is_control() || is_bidi_control(c)));
+                assert!(!s.chars().any(|c| c.is_control() || is_hidden_format(c)));
+                // Liste de référence indépendante du prédicat.
+                assert!(!s.contains(['\u{200B}', '\u{FEFF}', '\u{202E}', '\u{E0041}']));
                 assert_eq!(s, s.trim());
                 assert!(s.chars().count() <= PageTitle::MAX_CHARS);
                 assert_eq!(PageTitle::parse(s), Ok(t.clone()));
