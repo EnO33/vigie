@@ -19,6 +19,12 @@ services:
       - workspace:/workspace
       - cargo-registry:/usr/local/cargo/registry
     restart: unless-stopped
+    # Les vidages de crash passent par un pipe vers wsl-capture-crash (core_pattern de
+    # WSL2) : le noyau ignore RLIMIT_CORE=0 pour un pipe, seule la valeur 1 coupe le
+    # vidage. Sans ça, chaque abort d'un processus du conteneur écrit un .dmp sur C:
+    # (testé le 2026-11-27 : défaut et core=0 → vidage, core=1 → aucun).
+    ulimits:
+      core: 1
 
 volumes:
   workspace:
