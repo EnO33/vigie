@@ -134,6 +134,31 @@ run_guarded() {
   fi
 }
 
+# ---------------------------------------------------------------- revue sans fin
+
+# Au MAX_REVIEW_ROUNDS-ième passage d'une PR en status:changes-requested (compté dans sa timeline
+# GitHub), le développeur n'est plus relancé : la PR passe en status:blocked pour le board.
+MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-4}"
+
+review_rounds() {
+  gh api --paginate "repos/$REPO/issues/$1/timeline?per_page=100" \
+    --jq '.[] | select(.event == "labeled" and .label.name == "status:changes-requested") | .event' \
+    2>/dev/null | grep -c . || true
+}
+
+# Renvoie 0 si la PR a été bloquée.
+block_endless_review() {
+  local pr="$1" rounds
+  rounds="$(review_rounds "$pr")"
+  [[ "$rounds" =~ ^[0-9]+$ ]] && [ "$rounds" -ge "$MAX_REVIEW_ROUNDS" ] || return 1
+  gh pr comment "$pr" --repo "$REPO" --body "PR bloquée par l'orchestrateur : $rounds passages en status:changes-requested sans accord entre la revue et le développement. Au board de trancher." \
+    >/dev/null
+  gh pr edit "$pr" --repo "$REPO" --remove-label status:changes-requested --add-label status:blocked >/dev/null
+  log "✗ PR #$pr : $rounds tours de revue sans accord, bloquée pour le board"
+  notify "PR #$pr : $rounds tours de revue sans accord" high warning "https://github.com/$REPO/pull/$pr" \
+    "Le développeur n'est plus relancé ; la PR attend une décision du board (status:blocked)."
+}
+
 # ---------------------------------------------------------------- sélection
 
 prs_with() {
@@ -366,7 +391,10 @@ tick() {
   fi
 
   n="$(first_pr_with status:changes-requested)"
-  if [ -n "$n" ]; then run_guarded developer "$n" "Mission : corriger la PR #$n."; return; fi
+  if [ -n "$n" ]; then
+    block_endless_review "$n" && return
+    run_guarded developer "$n" "Mission : corriger la PR #$n."; return
+  fi
 
   n="$(first_in_review_missing review:approved)"
   if [ -n "$n" ]; then run_guarded reviewer "$n" "Mission : revoir la PR #$n."; return; fi

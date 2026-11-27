@@ -18,12 +18,24 @@ cat >"$TMP/bin/gh" <<'EOF'
 arg_after() { local prev="" a; for a in "${@:2}"; do [ "$prev" = "$1" ] && printf '%s' "$a"; prev="$a"; done; }
 expr="$(arg_after --jq "$@")"; expr="${expr:-.}"
 all() { cat "$FAKE"/issues/*.json 2>/dev/null | jq -s .; }
+path=""; for a in "$@"; do case "$a" in repos/*) path="${a%%\?*}"; break ;; esac; done
 case "$1 $2" in
   "api "*)
-    case "$2" in
-      */issues/*) jq -r "$expr" "$FAKE/issues/${2##*/}.json" ;;
-      */pulls/*)  jq -r "$expr" "$FAKE/issues/${2##*/}.json" ;;
+    case "$path" in
+      */timeline) n="${path%/timeline}"; jq -r "$expr" "$FAKE/timeline-${n##*/}.json" 2>/dev/null ;;
+      */issues/*) jq -r "$expr" "$FAKE/issues/${path##*/}.json" ;;
+      */pulls/*)  jq -r "$expr" "$FAKE/issues/${path##*/}.json" ;;
     esac ;;
+  "pr edit")
+    f="$FAKE/issues/$3.json"; prev=""
+    for a in "$@"; do
+      case "$prev" in
+        --remove-label) jq --arg l "$a" '.labels |= map(select(.name != $l))' "$f" >"$f.tmp" && mv "$f.tmp" "$f" ;;
+        --add-label) jq --arg l "$a" '.labels += [{name: $l}]' "$f" >"$f.tmp" && mv "$f.tmp" "$f" ;;
+      esac
+      prev="$a"
+    done ;;
+  "pr comment") arg_after --body "$@" >"$FAKE/comment-$3" ;;
   "issue list"|"pr list")
     if [ "$1" = pr ]; then kind='select(.pull_request != null)'; else kind='select(.pull_request == null)'; fi
     data="$(all | jq "[.[] | $kind]")"
@@ -117,6 +129,33 @@ echo none >"$FAKE/effect"
 FAKE_CLAUDE_RC=1 tick >/dev/null 2>&1
 [ ! -f "$STATE_DIR/stalled-23" ] && echo "ok   agent en échec : pas de mise de côté" \
   || { echo "FAIL agent en échec mis de côté"; failures=$((failures + 1)); }
+
+# --- revue sans fin : au 4e passage en status:changes-requested, la PR est bloquée
+reset_runs; rm -f "$FAKE"/issues/*.json "$STATE_DIR"/stalled-*
+jq -n '{number: 40, state: "open", pull_request: {}, sub_issues_summary: {total: 0},
+  labels: [{name: "status:changes-requested"}]}' >"$FAKE/issues/40.json"
+timeline() {  # timeline <n> : n passages en status:changes-requested, plus un autre label
+  jq -n --argjson n "$1" '[range($n) | {event: "labeled", label: {name: "status:changes-requested"}}]
+    + [{event: "labeled", label: {name: "status:in-review"}}, {event: "commented"}]' >"$FAKE/timeline-40.json"
+}
+timeline 3
+tick >/dev/null 2>&1
+expect "3 passages : le développeur corrige la PR" "developer 40" "$(runs)"
+reset_runs; rm -f "$STATE_DIR"/stalled-*
+timeline 4
+tick >/dev/null 2>&1
+expect "4e passage : plus de développeur" "" "$(runs)"
+expect "4e passage : PR en status:blocked, sans status:changes-requested" "status:blocked" \
+  "$(jq -r '[.labels[].name] | join(",")' "$FAKE/issues/40.json")"
+grep -q "PR #40 : 4 tours de revue sans accord" "$FAKE/notifs" 2>/dev/null \
+  && echo "ok   4e passage : notification « PR #40 : 4 tours de revue sans accord »" \
+  || { echo "FAIL 4e passage : notification absente"; failures=$((failures + 1)); }
+[ -s "$FAKE/comment-40" ] && echo "ok   4e passage : commentaire sur la PR" \
+  || { echo "FAIL 4e passage : pas de commentaire"; failures=$((failures + 1)); }
+reset_runs
+tick >/dev/null 2>&1
+case "$(runs)" in *"developer 40"*) echo "FAIL PR bloquée reprise au tick suivant"; failures=$((failures + 1)) ;;
+  *) echo "ok   PR bloquée : pas reprise au tick suivant" ;; esac
 
 echo
 if [ "$failures" -eq 0 ]; then echo "✓ garde-fou sans effet : tous les tests passent"
