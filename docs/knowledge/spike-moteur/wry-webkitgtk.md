@@ -15,7 +15,7 @@ Outil : `tools/spike-moteur/measure.sh` (`main` à `da9b69b`). Chaque chiffre vi
 | Crates | `wry =0.57.3`, `tao =0.37.3`, `webkit2gtk =2.0.2` (feature `v2_38`), `gtk 0.18.2` ; profil `release`, `rustc 1.100.0` |
 | Affichage | `Xvfb :98 -screen 0 1280x800x24` (`run.sh`), X11 seulement |
 
-Versions : 0.57.3 / 0.37.3 sont les dernières éligibles (≥ 7 jours) selon l'arbitrage de l'architecte du 2026-11-27 (API crates.io). **Non revérifié par moi** : `cargo info wry` donne 0.58.2, plus récente que 7 jours.
+Versions : 0.57.3 / 0.37.3 sont les dernières éligibles (≥ 7 jours), vérifié à l'API crates.io le 2026-11-27 : wry 0.57.3 publiée le 2026-11-18, 0.57.4 le 2026-11-25 (< 7 j) ; tao 0.37.3 le 2026-11-18, 0.38.0 le 2026-11-24 (< 7 j). Revue PR #33, tour 2.
 Le build contre WebKitGTK 2.54.3 **réussit** (point « non vérifié » de l'arbitrage : levé).
 
 Le prototype (`src/main.rs`, ~70 lignes) : une fenêtre tao 1000×600, `gtk::init()` avant les vues, HTML en ligne (`with_html`, aucune URL réseau),
@@ -70,7 +70,7 @@ Seul `with_bounds` positionne les vues (chaque vue = une fenêtre X11 enfant, `w
 
 Commande : l'hôte (`spike-wry --tabs 1`) tourne ; `kill -9` sur les deux `WebKitWebProcess` (une vue panneau + une vue onglet) ; observation 4 s plus tard.
 - **L'hôte survit** (`ps` : état `Sl`, toujours vivant), rien sur stderr, aucune fermeture de fenêtre.
-- **Signal reçu par l'hôte : aucun lié à la mort.** Avec `strace -f -e trace=none -e signal=all` : le `SIGCHLD` `CLD_KILLED`/`SIGKILL` du `WebKitWebProcess` arrive à un processus **intermédiaire** (pid 7374, parent des processus WebKit), pas à l'hôte (7221), **non identifié** (probablement un bac à sable bubblewrap, non vérifié ; dans une autre session, `ps --forest` montre les `WebKit*Process` enfants directs de l'hôte, sans intermédiaire) ; ce document n'a donc pas de section « bac à sable » comparable à `cef.md` ; l'hôte ne reçoit que les `SIGCHLD` de ses autres enfants (sortis avec le code 1).
+- **Signal reçu par l'hôte : `SIGCHLD`.** Rejoué avec `strace -f -e trace=none -e signal=SIGCHLD` puis `kill -9` du `WebKitWebProcess` enfant de l'hôte : l'hôte (pid 39950, `Tgid` identique) reçoit `SIGCHLD {si_code=CLD_KILLED, si_status=SIGKILL}` pour le pid tué ; les `WebKit*Process` sont ses enfants directs (`ps -o ppid=`), sans processus intermédiaire. Le « pid 7374 » d'une trace antérieure était très probablement un thread de l'hôte (`strace -f` préfixe par tid) ; **non prouvé** pour ce pid, et l'hypothèse d'un bac à sable bubblewrap est abandonnée. Les autres `SIGCHLD` vus sont des enfants sortis avec le code 1.
 - Les `WebKitWebProcess` **ne sont pas relancés** (plus aucun processus de ce nom) ; la dernière image reste à l'écran (pixels inchangés dans la capture). Le prototype n'enregistre pas `web-process-terminated` : le **signal côté API WebKit n'est pas testé**.
 
 ## Critère 6 — `cargo deny`
@@ -93,5 +93,5 @@ Avertissements : 10 `duplicate` (toml_edit, syn, proc-macro-crate, winnow, windo
 - **wry sous Linux = X11 uniquement** pour `build_as_child` (doc wry l. 1558-1566, relue par #14) ; ici le test est sous X11, **Wayland non testé**.
 - **tao pompe déjà GTK** : `tao-0.37.3/src/platform_impl/linux/event_loop.rs` l. 226 (`gtk::init()?`) et l. 1184 (`gtk::main_iteration_do(blocking)`). La pompe ajoutée au prototype est inutile : sans `ControlFlow::Poll`, sans pompe et sans `sleep`, la variante rend le panneau jaune et deux onglets (`--tabs 2 --all-visible`, capture `import -window root`, pixels (100,100) jaune, (400,100) et (800,300) blancs) et émet `VIGIE_SPIKE_READY`. L'exemple `winit.rs` de wry concerne winit, pas tao.
 - `Gdk-CRITICAL _gdk_frame_clock_freeze` écrit une fois sur stderr au démarrage : sans effet visible, cause non cherchée.
-- Non vérifié : `Gdk-CRITICAL` non reproduit à chaque run, signaux reçus par l'hôte non relancés depuis, `cargo deny` non relancé depuis la mesure.
+- Non vérifié : `Gdk-CRITICAL` non reproduit à chaque run, `cargo deny` non relancé depuis la mesure.
 - Non mesuré : vraie page web, trafic réseau réel, Windows/macOS, PSS mémoire, HiDPI.
