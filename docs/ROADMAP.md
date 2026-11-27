@@ -8,7 +8,7 @@
 1. **Spike moteur et toolkit UI** ([#11](https://github.com/EnO33/vigie/issues/11)) : comparer WebView2/wry, CEF (crate `cef`) et le toolkit de
    l'interface (webview chrome vs UI native). Livrable : ADR-0004 avec prototype jetable mesuré
    (démarrage, mémoire, multi-webview, contrôle de la télémétrie du moteur).
-2. **Port `PageEngine` + adaptateur retenu** : ouvrir une page, naviguer, événements titre/URL.
+2. **Port `PageEngine` + adaptateur retenu** ([#40](https://github.com/EnO33/vigie/issues/40)) : ouvrir une page, naviguer, événements titre/URL.
 3. **Modèle d'onglets → UI** : barre d'onglets verticale branchée sur `vigie-domain::tab`.
 4. **Barre d'URL** : saisie → `WebUrl` ou recherche (moteur de recherche configurable).
 5. **Historique local** : adaptateur SQLite, aucune donnée hors machine.
