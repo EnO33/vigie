@@ -50,6 +50,15 @@ chmod +x "$TMP/bin/cargo" "$TMP/bin/gh"
 git init -q --bare --initial-branch=main "$TMP/origin.git"
 git -C "$REPO_ROOT" push -q "$TMP/origin.git" HEAD:refs/heads/main
 git clone -q "$TMP/origin.git" "$TMP/wd"
+# Base sans tests d'outils (tools/*_test.sh) : l'étape « outils » est testée à part, par les PR 13
+# à 15, avec des tests factices rapides.
+tool_tests="$(git -C "$TMP/wd" ls-files -- 'tools/*_test.sh')"
+if [ -n "$tool_tests" ]; then
+  git -C "$TMP/wd" rm -q -- $tool_tests  # découpage voulu : un chemin par mot
+  git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid \
+    commit -q -m "test: base sans tests d'outils"
+  git -C "$TMP/wd" push -q origin HEAD:refs/heads/main
+fi
 git -C "$TMP/wd" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid \
   commit -q --allow-empty -m "docs: test"
 git -C "$TMP/wd" push -q origin HEAD:refs/pull/7/head
@@ -91,9 +100,24 @@ echo main >"$TMP/wd/marqueur-main"; g add marqueur-main
 g commit -q -m "feat: marqueur côté main"
 g push -q origin base:refs/heads/main
 
+# PR 13 et 14 : un test d'outil (tools/*_test.sh) qui échoue, un qui réussit.
+tool_pr() {  # tool_pr <n> <code de sortie>
+  g checkout -q -B "pr$1" base
+  mkdir -p "$TMP/wd/tools/demo"
+  printf '#!/usr/bin/env bash\necho "test d outil factice : code %s"\necho x >>"$GATES_TEST_DIR/tool-runs"\nexit %s\n' \
+    "$2" "$2" >"$TMP/wd/tools/demo/factice_test.sh"
+  chmod +x "$TMP/wd/tools/demo/factice_test.sh"  # sinon, sous Linux, mode du disque ≠ index
+  g add tools/demo/factice_test.sh
+  g update-index --chmod=+x tools/demo/factice_test.sh
+  g commit -q -m "test: outil factice (code $2)"
+  g push -q origin "pr$1:refs/pull/$1/head"
+}
+tool_pr 13 1
+tool_pr 14 0
+
 # Lance « gates.sh --pr <N> » (7 par défaut) ; FAIL_STEP vide = aucun échec.
 run_pr() {
-  : >"$TMP/calls"; : >"$TMP/statuses"; : >"$TMP/status-shas"
+  : >"$TMP/calls"; : >"$TMP/statuses"; : >"$TMP/status-shas"; rm -f "$TMP/tool-runs"
   (cd "$TMP/wd" && PATH="$TMP/bin:$PATH" GATES_TEST_DIR="$TMP" FAIL_STEP="$1" \
     bash "$GATES" --pr "${2:-7}" >"$TMP/out" 2>&1)
 }
@@ -145,6 +169,24 @@ export BREAK_IF_ALL="marqueur-main marqueur-pr"
 run_pr "" 12
 check "PR en retard qui casse une fois fusionnée" failure
 unset BREAK_IF_ALL
+
+# Étape « outils » : les tools/*_test.sh de la PR tournent, et leur échec fait échouer les gates.
+run_pr "" 14
+check "test d'outil qui réussit" success
+expect_tool_runs() {
+  if [ "$(grep -c x "$TMP/tool-runs" 2>/dev/null || echo 0)" = "$2" ]; then echo "ok   $1"
+  else echo "FAIL $1 : test d'outil lancé $(grep -c x "$TMP/tool-runs" 2>/dev/null || echo 0) fois, attendu $2"
+    failures=$((failures + 1)); fi
+}
+expect_tool_runs "test d'outil de la PR exécuté" 1
+run_pr "" 13
+check "test d'outil qui échoue" failure
+# GATES_SKIP_TOOL_TESTS est retiré (env -u) sur le chemin --pr : il ne peut pas masquer l'échec.
+export GATES_SKIP_TOOL_TESTS=1
+run_pr "" 13
+check "test d'outil qui échoue, GATES_SKIP_TOOL_TESTS=1 dans l'environnement" failure
+expect_tool_runs "GATES_SKIP_TOOL_TESTS ignoré en mode --pr" 1
+unset GATES_SKIP_TOOL_TESTS
 
 # Les contrôles viennent du gates.sh de confiance, pas de la copie de la PR.
 run_pr "" 8

@@ -9,6 +9,11 @@ Tu es développeur Rust sur Vigie. Une story à la fois.
 
 ## Mission « implémenter #N »
 
+0. Issue pas faisable maintenant pour une raison **durable** (date pas atteinte, dépendance encore
+   ouverte, action réservée au board) : ne la prends pas. Change son statut au lieu de la laisser
+   en `status:ready` : `gh issue edit N --remove-label status:ready --add-label status:blocked`, puis
+   un commentaire « Reprise après <date UTC ou #M> : <raison> ». L'orchestrateur met de côté 24 h
+   un passage sans effet : c'est un filet, pas une façon de refuser.
 1. `gh issue edit N --remove-label status:ready --add-label status:in-progress`
 2. Worktree isolé : `git fetch origin && git worktree add ../wt/N -b feat/N-<slug> origin/main`,
    puis travaille **uniquement** dans `../wt/N`.

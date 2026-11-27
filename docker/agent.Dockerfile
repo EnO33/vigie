@@ -22,6 +22,19 @@ RUN apt-get update \
  && rm -rf /tmp/gh.deb /var/lib/apt/lists/* \
  && gh --version | grep -q "gh version ${GH_VERSION} "
 
+# Moteurs web et mesure (epic #11, issue #13 ; puis le shell de Vigie). Versions de trixie lues
+# avec apt-cache policy le 2026-11-27 :
+#   libwebkit2gtk-4.1-dev 2.54.3-1~deb13u1, libgtk-3-dev 3.24.49-3 : wry (WebKitGTK, GTK 3)
+#   libnss3 2:3.110-1+deb13u5, libasound2t64 1.2.14-1+deb13u1 : seules dépendances de libcef.so
+#     (CEF 156.0.31) qui manquent encore, d'après ldd ; les bibliothèques ouvertes par dlopen à
+#     l'exécution ne sont pas couvertes par ce contrôle
+#   xvfb 2:21.1.16-1.3+deb13u4, xauth 1:1.1.2-1.1 : affichage virtuel (xvfb-run)
+#   strace 6.13+ds-1 : mesure réseau de tools/spike-moteur/measure.sh, sans capacité ajoutée
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libwebkit2gtk-4.1-dev libgtk-3-dev libnss3 libasound2t64 xvfb xauth strace \
+ && rm -rf /var/lib/apt/lists/*
+
 # Toolchain alignée sur rust-toolchain.toml (channel = "stable")
 RUN rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools-preview \
  && rustup default stable

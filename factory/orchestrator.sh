@@ -290,6 +290,29 @@ notify_weekly_report() {
   notify "Rapport hebdomadaire publié" low memo "$url" "Rapport du product-owner au board."
 }
 
+# Issues qui attendent le board (« #13, #28 ») : label board, ou area:factory sans aucun label
+# status:* (une issue bloquée, prête ou en cours est suivie par la factory, pas par le board).
+board_waiting() {
+  {
+    gh issue list --repo "$REPO" --state open --label area:factory --limit 100 --json number,labels \
+      --jq '.[] | select([.labels[].name] | any(startswith("status:")) | not) | .number'
+    gh issue list --repo "$REPO" --state open --label board --limit 100 --json number --jq '.[].number'
+  } 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' | sort -n -u | sed 's/^/#/' | paste -sd, - | sed 's/,/, /g'
+}
+
+# Tick sans travail : notifie la liste des issues qui attendent le board, une fois par changement.
+notify_board_waiting() {
+  local list file="$STATE_DIR/board-waiting"
+  list="$(board_waiting)"
+  [ "$list" != "$(cat "$file" 2>/dev/null)" ] || return 0
+  printf '%s\n' "$list" >"$file"
+  [ -n "$list" ] || return 0
+  log "la factory attend le board : $list"
+  notify "La factory attend le board : $list" default hourglass \
+    "https://github.com/$REPO/issues?q=is%3Aopen+label%3Aarea%3Afactory" \
+    "Rien à faire pour les agents. Issues en attente du board : $list."
+}
+
 # Signe de vie (priorité min), au premier passage de chaque jour UTC.
 heartbeat() {
   local stamp="$STATE_DIR/last-heartbeat" today since merged open state="active"
@@ -301,8 +324,9 @@ heartbeat() {
     --json number --jq 'length' 2>/dev/null || echo '?')"
   open="$(gh pr list --repo "$REPO" --state open --limit 100 --json number --jq 'length' 2>/dev/null || echo '?')"
   [ ! -f "$STATE_DIR/halted" ] || state="en pause"
+  local waiting; waiting="$(board_waiting)"
   notify "Vigie : signe de vie" min heartpulse "https://github.com/$REPO/pulls" \
-    "Factory $state. Merges (24 h) : $merged. PR ouvertes : $open."
+    "Factory $state. Merges (24 h) : $merged. PR ouvertes : $open.${waiting:+ Attend le board : $waiting.}"
 }
 
 close_finished_epics() {
@@ -381,6 +405,7 @@ tick() {
   fi
 
   log "rien à faire"
+  notify_board_waiting
 }
 
 main() {
