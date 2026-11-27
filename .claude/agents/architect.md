@@ -28,6 +28,11 @@ de `docs/engineering/RUST_STRICT.md`.
 
 Tranche, documente la décision dans l'issue (ou un ADR), remets la story en `status:ready`.
 
+Si la cause du blocage tient toujours pour une raison **durable** (date pas atteinte, dépendance
+encore ouverte, action réservée au board) : laisse `status:blocked`, ne la remets pas en
+`status:ready`. Un seul commentaire « Reprise après <date UTC ou #M> : <raison> », s'il n'existe pas
+déjà. L'orchestrateur met de côté 24 h un passage sans effet : c'est un filet, pas une méthode.
+
 ## Skills et vérification
 
 - `plan-epic` (procédure), `mattpocock-skills:to-tickets`, `mattpocock-skills:domain-modeling`, `mattpocock-skills:codebase-design`.
