@@ -35,7 +35,7 @@ DISPLAY=:98 measure.sh memory --settle 5 -- … --tabs 1 / --tabs 10
 | RSS, 10 onglets | 2637 Mo (11 vues) | 2415 Mo (10 vues) | 2616 Mo |
 
 Lecture : (B) économise une vue web, soit **≈ 220 Mo** (2637 − 2415 = 222 ; 674 − 451 = 223), c.-à-d. le coût d'une vue de #17 (≈ 216-218 Mo) : le panneau egui + eframe/glow coûte **≈ rien en RSS mesurée** à côté. Mais (B) démarre **≈ 150 ms plus tard** (444 contre 291).
-**Biais** : (1) `DELAY` : (B) ne crée les vues qu'au 6ᵉ frame (voir critère 3), avec `request_repaint_after(16 ms)` ; cela pèse environ 80-100 ms du retard, **non isolé** (non mesuré avec un délai différent). (2) Le READY de (A) vient de l'onglet 0, créé après le panneau ; celui de (B) de la seule vue. (3) Les RSS comptent plusieurs fois les pages partagées (pas de PSS). Pages triviales. Dispersion : ±2-3 % sur 10 runs.
+**Biais** : (1) `DELAY` : (B) ne crée les vues qu'au 6ᵉ frame (voir critère 3), avec `request_repaint_after(16 ms)` ; la part du retard due à ce délai est **non isolée**. (2) Le READY de (A) vient de l'onglet 0, créé après le panneau ; celui de (B) de la seule vue. (3) Les RSS comptent plusieurs fois les pages partagées (pas de PSS). Pages triviales. Dispersion : ±2-3 % sur 10 runs.
 
 ## Critère 2 — isolation IPC (variante A) : **le message n'atteint pas l'hôte**
 
@@ -54,7 +54,7 @@ Capture : `spike/captures/ui-b.png` (`import -window root`, 1280×800) : panneau
 Ce qui a échoué d'abord (**à retenir pour ADR-0004**) :
 1. `libxkbcommon-x11` / `libxcb-xkb` absentes de l'image (voir plus haut).
 2. **`GLXBadWindow` (`XMapRaised`) si les vues wry sont créées pendant le premier `ui()`** : winit panique (`Failed to call XMapRaised: XError { description: "GLXBadWindow", error_code: 170, … }`). Le même binaire sans vues (`--no-views`) s'affiche ; les vues créées après 5 frames (`DELAY=5`) marchent. Cause (ordre de création GLX/`XCreateSimpleWindow` ou mappage retardé par eframe) **non établie**. `LIBGL_ALWAYS_SOFTWARE=1` et un Xvfb `+extension GLX` n'y changent rien. Le fallback `wgpu` de l'arbitrage n'a pas été nécessaire : `glow` rend sous Xvfb.
-3. Une bande noire d'environ 13 px sépare le panneau de la vue (la vue démarre à x = 313 dans la capture alors que `with_bounds` demande 300) : cause **non cherchée** (marge de page, ou décalage du fond non repeint).
+3. La vue de page démarre à x = 313 au lieu de 300 dans **les deux** captures (en (A) le panneau jaune s'étend aussi jusqu'à 313, donc ce n'est pas propre à egui ; en (B) une bande noire de 13 px apparaît entre le panneau egui et la vue). Cause **non cherchée** ; elle fausse la lecture des largeurs, pas la comparaison.
 Non testés : ordre d'empilement avec un menu egui qui déborde sur la vue, focus clavier, redimensionnement, Wayland.
 
 ## Critère 4 — réseau (`strace -f`, 60 s)
@@ -77,5 +77,5 @@ Config d'eframe sans les features par défaut : conforme à la décision 2 de l'
 
 - Chiffres : (B) −220 Mo (une vue en moins) mais +150 ms au démarrage ; (A) a la même base que #17.
 - (A) : isolation IPC **prouvée** (`window.ipc` n'existe que sur le panneau). (B) n'a aucun pont par construction.
-- (B) a un coût d'intégration : winit (eframe) au lieu de tao, GTK à pomper à la main, `GLXBadWindow` à contourner (vues créées après quelques frames), deux bibliothèques X11 supplémentaires à l'exécution, ~400 crates de plus (`cargo tree` non compté : non vérifié).
+- (B) a un coût d'intégration : winit (eframe) au lieu de tao, GTK à pomper à la main, `GLXBadWindow` à contourner (vues créées après quelques frames), deux bibliothèques X11 supplémentaires à l'exécution, davantage de dépendances (non comptées).
 - Non mesuré : vraie page web, PSS, HiDPI, Wayland, Windows/macOS, accessibilité (`accesskit` compilé, non testé), rendu des polices système, `wgpu`.
