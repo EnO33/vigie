@@ -1,7 +1,7 @@
 # Spike moteur — CEF 156 (crate `cef` 156.7.0+156.0.31), Linux X11 sous Xvfb
 
 Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`5c7fd0ce81d75dbc3bf6eb81f54ceb4085896c4f`**
-(`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` (revu) `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
+(`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
 `VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact et commande exacte **non consignés** (`run.sh` n'existe pas à `a8ed63b`) ; ainsi que le premier essai de `kill -9`.
 Xvfb (pid 21406, `:99`) **tournait déjà** pendant les mesures publiées (lancé hors `measure.sh`) ; je n'ai **pas** rejoué à froid (non vérifié : avec l'ancien `run.sh` sans `setsid`, un Xvfb absent aurait été compté dans la session mesurée).
 Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836`). Chaque chiffre vient d'une commande ci-dessous, recopiée.
@@ -48,9 +48,9 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 - Erreurs de chargement à l'exécution (stderr) : aucune erreur de `dlopen`. Bruit constant : `ERROR:dbus/bus.cc:405 Failed to connect to the bus`
   (pas de bus D-Bus dans le conteneur), `Failed to send GetTerminationStatus message to zygote` à l'arrêt.
 - Blocs `unsafe` **écrits** dans le prototype : **0** (`grep -c unsafe src/main.rs`). Blocs `unsafe {` **dans le code expansé** des macros
-  `wrap_*!` du crate : **16** pour 8 types enveloppés (2 par type : `Clone::clone` et `Drop`), mesurés avec
-  `RUSTC_BOOTSTRAP=1 cargo rustc --release -- -Zunpretty=expanded | grep -c 'unsafe {'`. Les règles du projet interdisent `unsafe` : il faudrait
-  vérifier si les lints voient du code issu d'une macro externe. Vérifié par la revue (PR #32, 5e tour) avec deux crates de test : `unsafe` dans une `macro_rules!` d'un crate A, appelée depuis un crate B en `unsafe_code = "forbid"` (la valeur de `Cargo.toml` l. 23 du workspace) → build OK, **aucun diagnostic** ; le même `unsafe` écrit dans B est refusé. Les 16 blocs passeraient donc sans bruit. Je n'ai pas rejoué cet essai. Les pointeurs nuls passés à `execute_process`/`initialize`
+  `wrap_*!` du crate : **16** pour 8 types enveloppés (2 par type : `Clone::clone`, qui appelle `add_ref`, et `Rc::as_base`, qui fait `std::mem::transmute(&base.cef_object)` ; pas de `Drop` ; `macro_rules! wrap_client` à `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 28082, les autres `wrap_*` sont construites pareil, seul `wrap_client` relu), mesurés avec
+  `RUSTC_BOOTSTRAP=1 cargo rustc --release -- -Zunpretty=expanded | grep -c 'unsafe {'`. Chaque expansion émet aussi `#[allow(clippy::new_ret_no_self)]` sur `new` (même ligne). Les règles du projet interdisent `unsafe`, `transmute` et `#[allow]` : il faudrait
+  vérifier si les lints voient du code issu d'une macro externe. Essai fait par un relecteur, non rejoué ici, avec deux crates de test : `unsafe` dans une `macro_rules!` d'un crate A, appelée depuis un crate B en `unsafe_code = "forbid"` (la valeur de `Cargo.toml` l. 23 du workspace) → build OK, **aucun diagnostic** ; le même `unsafe` écrit dans B est refusé. Les 16 blocs passeraient donc sans bruit. Je n'ai pas rejoué cet essai. Les pointeurs nuls passés à `execute_process`/`initialize`
   (`windows_sandbox_info`) n'exigent aucun `unsafe`.
 - Le crate lui-même contient `unsafe` partout (ex. `impl Default for BoxLayoutSettings` utilise `std::mem::zeroed()`) : c'est la surface FFI, hors du code de Vigie.
 
@@ -62,7 +62,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
   Une somme **SHA-1** seulement, issue de l'index du même CDN : pas de signature (non vérifié : l'index est-il authentifié ailleurs).
   **Cette somme n'est vérifiée qu'au téléchargement** (`download-cef-3.0.1/src/lib.rs` l. 329, `calculate_file_sha1 != sha`). **Hors réseau, aucune vérification d'intégrité n'est faite** : `check_archive` → `check_archive_json` (l. 102-123) lit seulement le **nom** dans `archive.json` et accepte toute version `<=` 156.0.31 (l. 114, `archive <= expected`), donc aussi une version plus ancienne ; aucun hash des fichiers extraits. Un `CEF_PATH` « valide » n'est pas un `CEF_PATH` contrôlé.
 - `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 109-110 → `resolve_cef_dir` l. 25-55, téléchargement l. 28-52), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
-  ou si son contenu n'est pas valide (l. 87-108 : `download_to_versioned`).
+  ou si `CEF_PATH` à plat est invalide (l. 100) ou absent (l. 107), via `download_to_versioned`.
 - **Build hors réseau : oui, dans deux cas** (`build.rs` l. 87-108) : `CEF_PATH/156.0.31/cef_linux_x86_64/` existe avec un `archive.json` valide (`resolve_from_versioned` l. 57-66, `check_archive` l. 64) ; ou `CEF_PATH` à plat (sans `156.0.31/`) contient un `archive.json` valide (l. 99).
   **Téléchargement** si `CEF_PATH` n'existe pas (l. 107), si `CEF_PATH` à plat est invalide (l. 100), ou si `156.0.31/` existe sans `cef_linux_x86_64/` (`resolve_cef_dir` l. 28-52). `CEF_PATH/156.0.31/` avec un `archive.json` invalide : pas de téléchargement, la build **échoue** (`check_archive`, l. 64). Testé ici : le premier cas seulement. `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
   `CEF_PATH` (pas `CEF_DOWNLOAD_URL`) : la preuve est donc faite depuis un `target/` **neuf** (`rm -rf` puis `CARGO_TARGET_DIR=/tmp/target-cef-clean`) :
@@ -76,7 +76,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 
 Commande (Xvfb et variables d'environnement gérés par `run.sh`) :
 `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs N`, 10 lancements chacun, caches `/tmp/vigie-spike-cef` chauds
-sauf le tout premier lancement. Mesure = spawn → `VIGIE_SPIKE_READY` (premier chargement de la page locale), pas le premier pixel visible ; elle inclut le `bash` de `run.sh`, **non mesuré** : un `pgrep -f` et, si le binaire est plus récent que `/tmp/cefrun`, un `cp -r` d'environ 1,5 Go ; les mesures ci-dessous ont `/tmp/cefrun` à jour et Xvfb déjà lancé.
+sauf le tout premier lancement. Mesure = spawn → `VIGIE_SPIKE_READY` (premier chargement de la page locale), pas le premier pixel visible ; elle inclut le `bash` de `run.sh`, **non mesuré** : un `pgrep -f` et, si le binaire est plus récent que `/tmp/cefrun` (`run.sh` l. 8 compare le binaire seul, pas `libcef.so` ni les `.pak`), un `cp -r` d'environ 1,5 Go ; les mesures ci-dessous ont le binaire de `/tmp/cefrun` à jour et Xvfb déjà lancé.
 Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur de `uptime`, 1 min) :
 
 | `--tabs` | série | charge (1 min) | médiane | min | max |
@@ -88,16 +88,18 @@ Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur
 | 10 | 2 | 2,06 | **257 ms** | 245 ms | 342 ms |
 | 10 | 3 | 3,10 | **313 ms** | 244 ms | 353 ms |
 
-Mesures de la revue, même conteneur, binaire de `5c7fd0c`, Xvfb déjà lancé, commande `bash tools/spike-moteur/measure.sh startup --runs N --timeout 60 -- spike/cef/run.sh --tabs T` :
+Autres séries, même conteneur, binaire de `5c7fd0c`, Xvfb déjà lancé, commande `bash tools/spike-moteur/measure.sh startup --runs N --timeout 60 -- spike/cef/run.sh --tabs T` :
 
 | charge (1 min) | runs | 1 vue : médiane (min-max) | 10 vues : médiane (min-max) |
 |---|---|---|---|
 | 0,57 | 3 | 229 (213-268) ms | 376 (340-459) ms |
 | 1,21 | 5 | 257 (247-286) ms | 336 (311-362) ms |
 | 1,21 | 5 | 203 (199-230) ms | 397 (322-421) ms |
+| 0,05 | non consigné | 269 (262-318) ms | 385 (360-410) ms |
+| 0,10 | 3 | 162 (162-1216) ms (1 valeur aberrante) | 246 (242-259) ms |
 
-Autres mesures de la revue au SHA `1325dd1` : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
-**Lecture honnête : la médiane varie d'une session à l'autre, d'environ 160 à 270 ms pour 1 vue et d'environ 255 à 400 ms pour 10 vues.** La charge ne l'explique pas : les séries de la revue ont une charge plus basse (0,57-1,21) que les miennes (1,7-3,1) et sont plus lentes. Cause **non vérifiée**.
+Autres mesures au SHA `1325dd1` : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
+**Lecture honnête : la médiane varie d'une session à l'autre : bornes = min et max des médianes des deux tableaux, 162-269 ms pour 1 vue et 246-397 ms pour 10 vues ; une nouvelle session peut sortir de cette plage.** La charge ne l'explique pas : les séries à charge basse (0,05-1,21) sont plus lentes que les premières (1,7-3,1), et la série à 0,10 est aussi rapide. Cause **non vérifiée**.
 Pour l'ADR : la variance entre sessions est du même ordre que l'écart entre 1 et 10 vues.
 
 Rejouer : `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs 1` (depuis la racine du dépôt, `run.sh` pris sur `spike/moteur-cef`).
@@ -107,13 +109,13 @@ Avec 10 vues, `VIGIE_SPIKE_READY` sort à la **première** page chargée : les 9
 
 Commande : `measure.sh memory --settle 5 --timeout 60 -- spike/cef/run.sh --tabs N` (somme des RSS de la session, 5 s après READY ; une mesure par cas, refaite avec le binaire de `1325dd1` (identique à `5c7fd0c`, `cmp`)).
 
-| `--tabs` | RSS total |
+| `--tabs` | RSS total (MiB, `measure.sh` l. 139 : ko / 1024) |
 |---|---|
-| 1 | **779 Mo** |
-| 10 | **1752 Mo** |
+| 1 | **779 MiB** |
+| 10 | **1752 MiB** |
 
 Limite : le RSS additionne les pages partagées entre processus (`libcef.so` mappé par chaque processus Chromium), donc il **surestime**
-la mémoire réellement consommée. Pas de PSS mesuré (non fait). Écart 1 → 10 vues : +973 Mo, soit ~108 Mo par vue supplémentaire.
+la mémoire réellement consommée. Pas de PSS mesuré (non fait). Écart 1 → 10 vues : +973 MiB, soit ~108 MiB par vue supplémentaire.
 
 ## Critère 1 — réseau, page locale, sans URL
 
@@ -145,7 +147,7 @@ Les noms de domaine n'ont **pas été relevés**. Les requêtes DNS passent prob
 
 **Captures B (avec switches).** #14 n'a pas établi de noms de switches (« non vérifié », `docs/knowledge/LOG.md`, Q3). J'ai donc pris des noms
 connus de Chromium et vérifié seulement qu'ils sont des chaînes présentes dans `libcef.so` (`grep -c -a -F -- <nom> libcef.so` ≥ 1 pour chacun) : ce n'est **pas** une preuve de leur effet.
-`VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run` : commande exacte de lancement **non consignée** (la commande ci-dessus, avec `run.sh`, vaut pour A seulement). **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par la revue : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
+`VIGIE_SPIKE_SWITCHES=disable-background-networking,disable-component-update,disable-sync,no-pings,disable-domain-reliability,disable-breakpad,metrics-recording-only,disable-default-apps,no-first-run` : commande exacte de lancement **non consignée** (la commande ci-dessus, avec `run.sh`, vaut pour A seulement). **Application des switches : non vérifiée.** `append_switch` dans `on_before_command_line_processing` modifie le `CommandLine` de CEF, pas l'argv du noyau : `/proc/<pid>/cmdline` ne les montre pas (rejoué par un relecteur : 0 occurrence). Seul indice : la baisse du nombre d'appels réseau ci-dessous. Résultat :
 
 ```
 network_calls=17
@@ -179,10 +181,10 @@ Window can host at most one Chrome style BrowserView but potentially multiple Al
 fenêtre en style Chrome + 2 vues Alloy, les deux pages s'affichent, aucune erreur `Cannot add multiple` dans la sortie. Ce que je n'ai pas observé : **le panneau de 150 px n'est pas visible** sur cette capture (x 0-150 blanc, indiscernable des vues ; il est gris avec une fenêtre Alloy), cause non établie : le critère « panneau + 2 vues » n'est donc démontré qu'avec une fenêtre Alloy ; aucune barre d'outils Chrome n'est visible non plus (cause non établie ; pas de gestionnaire de fenêtres sous Xvfb) ; l'apport réel du style Chrome pour la fenêtre (UI, extensions) n'est donc pas évalué. Sans flex, les vues gardent leur taille préférée (100×100) : il faut `set_flex_for_view` et
 `cross_axis_alignment = STRETCH`. Testé avec 2 vues (visuel, fenêtre Alloy et fenêtre Chrome) et 10 vues (démarrage, mémoire, fenêtre Alloy) ; pas de capture à 10 vues.
 
-Couleur du panneau : hypothèse de la revue (`cef-dll-sys` bindings l. 32590 : « background color will be automatically reset when OnThemeChanged is called » ;
+Couleur du panneau : hypothèse (`cef-dll-sys` bindings l. 32590 : « background color will be automatically reset when OnThemeChanged is called » ;
 l. 32260 : `OnThemeChanged` est appelé quand la vue est ajoutée à une fenêtre). Testée : `set_background_color` déplacé **après** `add_child_view` (`main.rs` du SHA ci-dessus) :
 la capture est **octet pour octet identique** (`cmp`) à celle d'avant. La cause reste donc **inconnue** ; l'hypothèse OnThemeChanged-à-l'ajout n'explique pas à elle seule l'échec
-(piste de la revue, non testée : `cef-dll-sys` bindings l. 33886 dit que les couleurs du thème Chrome sont appliquées et `on_theme_changed` déclenché quand un `BrowserView` est ajouté à la hiérarchie de la fenêtre ; le panneau étant ajouté **avant** les vues, leur ajout remettrait la couleur, ce qui serait cohérent avec la capture identique. Piste à tester : `set_background_color` dans `ViewDelegate::on_theme_changed`, que l. 32260 recommande pour surcharger les couleurs du thème. Autre piste : couleur ignorée pour un `Panel` sans fond opaque.)
+(piste, non testée : `cef-dll-sys` bindings l. 33886 dit que les couleurs du thème Chrome sont appliquées et `on_theme_changed` déclenché quand un `BrowserView` est ajouté à la hiérarchie de la fenêtre ; le panneau étant ajouté **avant** les vues, leur ajout remettrait la couleur, ce qui serait cohérent avec la capture identique. Piste à tester : `set_background_color` dans `ViewDelegate::on_theme_changed`, que l. 32260 recommande pour surcharger les couleurs du thème. Autre piste : couleur ignorée pour un `Panel` sans fond opaque.)
 
 ## Critère 5 — processus de rendu tué (`kill -9`)
 
@@ -206,6 +208,7 @@ plusieurs vues partageant un rendu.
 - Noms de domaine contactés ; effet réel de chaque switch ; processus à l'origine des connexions.
 - `cargo deny` sur le projet (repris de l'architecte, non relancé).
 - Autre machine que ce conteneur WSL2 ; Wayland (CEF Views sous X11 seulement ici).
-- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (160-270 ms pour 1 vue, charge exclue comme explication simple).
+- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (162-269 ms pour 1 vue, charge exclue comme explication simple).
 - Trafic réseau avec un profil existant : les captures sont un premier lancement (profil vide).
 - Panneau invisible avec une fenêtre Chrome (cause non établie).
+- Commande et SHA exacts des captures réseau B1/B2 et du premier `kill -9` ; PSS (non mesuré) ; règle du PID de rendu (2 essais) ; Xvfb jamais lancé à froid par `run.sh` ; un seul cas de build hors réseau testé ; essai des lints sur macro externe non rejoué ici.
