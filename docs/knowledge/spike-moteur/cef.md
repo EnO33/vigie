@@ -2,7 +2,8 @@
 
 Story #18, epic #11. Prototype jetable, jamais mergé : branche `spike/moteur-cef`, SHA **`5c7fd0ce81d75dbc3bf6eb81f54ceb4085896c4f`**
 (`spike/cef/`, captures dans `spike/cef/captures/` sur cette branche). Ce SHA ajoute à `a8ed63b` `run.sh` (Xvfb lancé avec `setsid -f` depuis `5c7fd0c`, sans effet sur le binaire), le choix du style de fenêtre
-`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact et commande exacte **non consignés** (`run.sh` n'existe pas à `a8ed63b`) ; ainsi que le premier essai de `kill -9`.
+`VIGIE_SPIKE_WINDOW_STYLE` et l'ordre `set_background_color` / `add_child_view`. Les mesures de démarrage et de mémoire, et les captures réseau sans switches (A1, A2), ont été faites avec le binaire de `1325dd1` (identique à celui de `5c7fd0c`, seul `run.sh` change). Les captures réseau avec switches (B1, B2) : SHA exact et commande exacte **non consignés** (`run.sh` n'existe pas à `a8ed63b`). Non consignés aussi : SHA et commande exacts du premier essai de `kill -9`.
+Mode du prototype : **incognito**. `main.rs` l. 148-151 ne pose que `root_cache_path` ; `cache_path` est vide, donc (`cef-dll-sys` bindings l. 17810) « browsers will be created in "incognito mode" where in-memory caches are used for storage and no profile-specific data is persisted to disk (installation-specific data will still be persisted in root_cache_path) ». Dans ce document, « cache chaud », « profil vide » et « profil existant » désignent donc seulement les données d'installation de `/tmp/vigie-spike-cef`, jamais un profil persistant.
 Xvfb (pid 21406, `:99`) **tournait déjà** pendant les mesures publiées (lancé hors `measure.sh`) ; je n'ai **pas** rejoué à froid (non vérifié : avec l'ancien `run.sh` sans `setsid`, un Xvfb absent aurait été compté dans la session mesurée).
 Mesures du 2026-11-27, outil `tools/spike-moteur/measure.sh` (`main` à `1eeb836`). Chaque chiffre vient d'une commande ci-dessous, recopiée.
 
@@ -48,9 +49,9 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 - Erreurs de chargement à l'exécution (stderr) : aucune erreur de `dlopen`. Bruit constant : `ERROR:dbus/bus.cc:405 Failed to connect to the bus`
   (pas de bus D-Bus dans le conteneur), `Failed to send GetTerminationStatus message to zygote` à l'arrêt.
 - Blocs `unsafe` **écrits** dans le prototype : **0** (`grep -c unsafe src/main.rs`). Blocs `unsafe {` **dans le code expansé** des macros
-  `wrap_*!` du crate : **16** pour 8 types enveloppés (2 par type : `Clone::clone`, qui appelle `add_ref`, et `Rc::as_base`, qui fait `std::mem::transmute(&base.cef_object)` ; pas de `Drop` ; `macro_rules! wrap_client` à `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 28082, les autres `wrap_*` sont construites pareil, seul `wrap_client` relu), mesurés avec
+  `wrap_*!` du crate : **16** pour 8 types enveloppés (2 par type : `Clone::clone`, qui appelle `add_ref`, et `Rc::as_base`, qui fait `std::mem::transmute(&base.cef_object)` ; pas de `Drop` ; `macro_rules! wrap_client` à `cef-156.7.0+156.0.31/src/bindings/x86_64_unknown_linux_gnu.rs` l. 28082, les 66 `macro_rules! wrap_*` du fichier ont 2 `unsafe {`, 1 `transmute` et aucun `impl Drop`, vérifiés par le relecteur), mesurés avec
   `RUSTC_BOOTSTRAP=1 cargo rustc --release -- -Zunpretty=expanded | grep -c 'unsafe {'`. Chaque expansion émet aussi `#[allow(clippy::new_ret_no_self)]` sur `new` (même ligne). Les règles du projet interdisent `unsafe`, `transmute` et `#[allow]` : il faudrait
-  vérifier si les lints voient du code issu d'une macro externe. Essai fait par un relecteur, non rejoué ici, avec deux crates de test : `unsafe` dans une `macro_rules!` d'un crate A, appelée depuis un crate B en `unsafe_code = "forbid"` (la valeur de `Cargo.toml` l. 23 du workspace) → build OK, **aucun diagnostic** ; le même `unsafe` écrit dans B est refusé. Les 16 blocs passeraient donc sans bruit. Je n'ai pas rejoué cet essai. Les pointeurs nuls passés à `execute_process`/`initialize`
+  vérifier si les lints voient du code issu d'une macro externe. Essai rejoué par le relecteur (`rustc 1.100.0`, `cargo clippy`, `[lints.rust] unsafe_code = "forbid"` et `[lints.clippy] allow_attributes = "deny"`, valeurs du workspace) avec deux crates de test : `#[allow]` et `unsafe { transmute }` dans une `macro_rules!` d'un crate A, appelée depuis un crate B → **0 diagnostic**, rc 0 ; témoin : le même `unsafe { transmute }` écrit dans B → `error: usage of an unsafe block`. Les 16 blocs passeraient donc sans bruit. Les pointeurs nuls passés à `execute_process`/`initialize`
   (`windows_sandbox_info`) n'exigent aucun `unsafe`.
 - Le crate lui-même contient `unsafe` partout (ex. `impl Default for BoxLayoutSettings` utilise `std::mem::zeroed()`) : c'est la surface FFI, hors du code de Vigie.
 
@@ -60,9 +61,8 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
   Index `index.json` de ce CDN, archive `cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_linux64_minimal.tar.bz2` (333 321 290 octets).
 - **Somme de contrôle** : SHA-1 `0adb813face4ca098f17210fe471b172c2bc1950` (`archive.json` écrit par la build ; `sha1sum` de l'archive donne la même valeur).
   Une somme **SHA-1** seulement, issue de l'index du même CDN : pas de signature (non vérifié : l'index est-il authentifié ailleurs).
-  **Cette somme n'est vérifiée qu'au téléchargement** (`download-cef-3.0.1/src/lib.rs` l. 329, `calculate_file_sha1 != sha`). **Hors réseau, aucune vérification d'intégrité n'est faite** : `check_archive` → `check_archive_json` (l. 102-123) lit seulement le **nom** dans `archive.json` et accepte toute version `<=` 156.0.31 (l. 114, `archive <= expected`), donc aussi une version plus ancienne ; aucun hash des fichiers extraits. Un `CEF_PATH` « valide » n'est pas un `CEF_PATH` contrôlé.
-- `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 109-110 → `resolve_cef_dir` l. 25-55, téléchargement l. 28-52), et **aussi avec** `CEF_PATH` si ce dossier n'existe pas
-  ou si `CEF_PATH` à plat est invalide (l. 100) ou absent (l. 107), via `download_to_versioned`.
+  **Cette somme est vérifiée au téléchargement** (`download-cef-3.0.1/src/lib.rs` l. 329, `calculate_file_sha1 != sha`) **et sur une archive `.tar.bz2` déjà présente** (l. 267-268 ; supprimée si corrompue, l. 275-280) ; **aucune vérification si `cef_linux_x86_64/` existe déjà**. **Hors réseau, aucune vérification d'intégrité n'est faite** : `check_archive` → `check_archive_json` (l. 102-123) lit seulement le **nom** dans `archive.json` et accepte toute version `<=` 156.0.31 (l. 114, `archive <= expected`), donc aussi une version plus ancienne ; aucun hash des fichiers extraits. Un `CEF_PATH` « valide » n'est pas un `CEF_PATH` contrôlé.
+- `cef-dll-sys/build.rs` télécharge l'archive **pendant `cargo build`** : sans `CEF_PATH` (l. 109-110 → `resolve_cef_dir` l. 25-55), et **aussi avec** `CEF_PATH` dans les cas de la liste ci-dessous.
 - **Build hors réseau : oui, dans deux cas** (`build.rs` l. 87-108) : `CEF_PATH/156.0.31/cef_linux_x86_64/` existe avec un `archive.json` valide (`resolve_from_versioned` l. 57-66, `check_archive` l. 64) ; ou `CEF_PATH` à plat (sans `156.0.31/`) contient un `archive.json` valide (l. 99).
   **Téléchargement** si `CEF_PATH` n'existe pas (l. 107), si `CEF_PATH` à plat est invalide (l. 100), ou si `156.0.31/` existe sans `cef_linux_x86_64/` (`resolve_cef_dir` l. 28-52). `CEF_PATH/156.0.31/` avec un `archive.json` invalide : pas de téléchargement, la build **échoue** (`check_archive`, l. 64). Testé ici : le premier cas seulement. `build.rs` l. 14-16 ne relance que pour `FLATPAK`, `NIX_CEF_BINARY`,
   `CEF_PATH` (pas `CEF_DOWNLOAD_URL`) : la preuve est donc faite depuis un `target/` **neuf** (`rm -rf` puis `CARGO_TARGET_DIR=/tmp/target-cef-clean`) :
@@ -75,7 +75,7 @@ Dans le conteneur, `unshare -rn true` échoue aussi (`Operation not permitted`).
 ## Critère 2 — démarrage
 
 Commande (Xvfb et variables d'environnement gérés par `run.sh`) :
-`bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs N`, 10 lancements chacun, caches `/tmp/vigie-spike-cef` chauds
+`bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs N`, 10 lancements chacun, données d'installation de `/tmp/vigie-spike-cef` déjà présentes (« chaud », mode incognito, voir l’en-tête)
 sauf le tout premier lancement. Mesure = spawn → `VIGIE_SPIKE_READY` (premier chargement de la page locale), pas le premier pixel visible ; elle inclut le `bash` de `run.sh`, **non mesuré** : un `pgrep -f` et, si le binaire est plus récent que `/tmp/cefrun` (`run.sh` l. 8 compare le binaire seul, pas `libcef.so` ni les `.pak`), un `cp -r` d'environ 1,5 Go ; les mesures ci-dessous ont le binaire de `/tmp/cefrun` à jour et Xvfb déjà lancé.
 Trois séries de 10 lancements par cas, à la suite (charge machine = 1re valeur de `uptime`, 1 min) :
 
@@ -95,11 +95,11 @@ Autres séries, même conteneur, binaire de `5c7fd0c`, Xvfb déjà lancé, comma
 | 0,57 | 3 | 229 (213-268) ms | 376 (340-459) ms |
 | 1,21 | 5 | 257 (247-286) ms | 336 (311-362) ms |
 | 1,21 | 5 | 203 (199-230) ms | 397 (322-421) ms |
-| 0,05 | non consigné | 269 (262-318) ms | 385 (360-410) ms |
+| 0,05 | 3 | 269 (262-318) ms | 385 (360-410) ms |
 | 0,10 | 3 | 162 (162-1216) ms (1 valeur aberrante) | 246 (242-259) ms |
 
-Autres mesures au SHA `1325dd1` : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
-**Lecture honnête : la médiane varie d'une session à l'autre : bornes = min et max des médianes des deux tableaux, 162-269 ms pour 1 vue et 246-397 ms pour 10 vues ; une nouvelle session peut sortir de cette plage.** La charge ne l'explique pas : les séries à charge basse (0,05-1,21) sont plus lentes que les premières (1,7-3,1), et la série à 0,10 est aussi rapide. Cause **non vérifiée**.
+Autres mesures au SHA `1325dd1` (médianes) : 1 vue 161-162 ms, 10 vues 257-258 ms (charge 1,9) ; avec le binaire de `a8ed63b` : 203-221 ms (1 vue).
+**Lecture honnête : la médiane varie d'une session à l'autre : bornes = min et max des médianes de tous les tableaux, y compris la ligne `1325dd1` ci-dessus : 161-269 ms pour 1 vue et 246-397 ms pour 10 vues ; une nouvelle session peut sortir de cette plage.** Pas de lien visible entre la charge et la médiane (la série à 0,10 est la plus rapide, celle à 0,05 une des plus lentes). Cause **non vérifiée**.
 Pour l'ADR : la variance entre sessions est du même ordre que l'écart entre 1 et 10 vues.
 
 Rejouer : `bash tools/spike-moteur/measure.sh startup --runs 10 --timeout 60 -- spike/cef/run.sh --tabs 1` (depuis la racine du dépôt, `run.sh` pris sur `spike/moteur-cef`).
@@ -120,7 +120,7 @@ la mémoire réellement consommée. Pas de PSS mesuré (non fait). Écart 1 → 
 ## Critère 1 — réseau, page locale, sans URL
 
 Commande : `rm -rf /tmp/vigie-spike-cef` (cache vidé avant chaque capture), puis `measure.sh network --duration 60 --timeout 90 -- spike/cef/run.sh --tabs 1` (`strace -f`, `connect/sendto/sendmsg/sendmmsg`).
-Convention de comptage : **destinations = lignes `network_dest`, DNS du conteneur `127.0.0.11:53` inclus**. Deux captures par cas (A1, A2 sans switches ; B1, B2 avec), la première de chaque cas ci-dessous. **Toutes sont un premier lancement (profil vide)** : le démarrage ci-dessus est mesuré cache chaud, le trafic d'un lancement avec profil existant n'est pas capturé.
+Convention de comptage : **destinations = lignes `network_dest`, DNS du conteneur `127.0.0.11:53` inclus**. Deux captures par cas (A1, A2 sans switches ; B1, B2 avec), la première de chaque cas ci-dessous. **Toutes sont un premier lancement, en mode incognito** (voir l’en-tête) : le démarrage ci-dessus est mesuré avec les données d'installation déjà présentes, le trafic avec un `cache_path` réel n'est pas capturé.
 **CEF émet du trafic réseau tout seul**, alors que la page est un `data:` :
 
 ```
@@ -161,7 +161,7 @@ network_dest=[2001:4860:4860::8888]:443
 
 B2 : 18 appels, mêmes 6 destinations.
 
-**Résultat : ces switches réduisent (26-27 → 17-18 appels, 8 → 6 destinations, 2 captures par cas) mais ne suppriment pas le trafic.** Les deux destinations `192.178.204.x:443` et `213.44.21.206:443` disparaissent dans les deux captures avec switches ; variance au-delà de 2 captures non mesurée. Il reste des connexions que je n'ai pas
+**Résultat : baisse observée (26-27 → 17-18 appels, 8 → 6 destinations, 2 captures par cas) ; attribution aux switches non établie (binaire et commande de B non consignés, une autre variable peut l'expliquer) ; le trafic n'est pas supprimé.** Les deux destinations `192.178.204.x:443` et `213.44.21.206:443` disparaissent dans les deux captures avec switches ; variance au-delà de 2 captures non mesurée. Il reste des connexions que je n'ai pas
 su attribuer. Pour l'ADR (#20) : « zéro requête au démarrage » n'est **pas** acquis avec CEF 156 ; il faut une story dédiée (journaux `--log-net-log`
 ou `--enable-logging=stderr --v=1` pour nommer les destinations, sur le source Chromium 156). Les connexions peuvent aussi être de simples tentatives
 bloquées (`connect … = -1 ENETUNREACH` vu sur l'IPv6), le conteneur ayant un accès Internet partiel.
@@ -208,7 +208,7 @@ plusieurs vues partageant un rendu.
 - Noms de domaine contactés ; effet réel de chaque switch ; processus à l'origine des connexions.
 - `cargo deny` sur le projet (repris de l'architecte, non relancé).
 - Autre machine que ce conteneur WSL2 ; Wayland (CEF Views sous X11 seulement ici).
-- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (162-269 ms pour 1 vue, charge exclue comme explication simple).
-- Trafic réseau avec un profil existant : les captures sont un premier lancement (profil vide).
+- Cause de la couleur de fond du panneau ignorée ; apport du style Chrome pour la fenêtre ; comportement avec 10 vues à l'écran ; cause de la variance de démarrage entre sessions (161-269 ms pour 1 vue, pas de lien visible avec la charge).
+- Démarrage et trafic réseau avec un `cache_path` réel (profil persistant, cas de Vigie) : le prototype tourne en mode incognito, les captures sont un premier lancement.
 - Panneau invisible avec une fenêtre Chrome (cause non établie).
-- Commande et SHA exacts des captures réseau B1/B2 et du premier `kill -9` ; PSS (non mesuré) ; règle du PID de rendu (2 essais) ; Xvfb jamais lancé à froid par `run.sh` ; un seul cas de build hors réseau testé ; essai des lints sur macro externe non rejoué ici.
+- Commande et SHA exacts des captures réseau B1/B2 et du premier `kill -9` ; PSS (non mesuré) ; règle du PID de rendu (2 essais) ; Xvfb jamais lancé à froid par `run.sh` ; un seul cas de build hors réseau testé .
