@@ -62,7 +62,8 @@ case "$*" in
       echo "GraphQL: Pull request is not mergeable (mergePullRequest) jeton ghp_FAKEtoken1234567890abcdef" >&2
       exit 1
     fi ;;
-  *"issue list"*"--label area:factory"*) cat "$FAKE/wait-factory" 2>/dev/null ;;
+  *"issue list"*"--label area:factory"*)  # issues JSON : le filtre --jq de l'orchestrateur s'applique
+    jq -r "$(arg_after --jq "$@")" "$FAKE/wait-factory.json" 2>/dev/null ;;
   *"issue list"*"--label board"*) cat "$FAKE/wait-board" 2>/dev/null ;;
   *"--label factory:halt"*) c="$(cat "$FAKE/halt")"; [ "$c" = erreur ] && exit 1; echo "$c" ;;
   *"--label type:report"*) echo "https://github.com/test/vigie/issues/5" ;;
@@ -194,20 +195,31 @@ case "$(cat "$FAKE/body.1")" in *"Merges (24 h) : 2"*"PR ouvertes : 3"*) ok "sig
   *) ko "signe de vie : contenu « $(cat "$FAKE/body.1") »" ;; esac
 
 # --- la factory attend le board : une notification par changement de la liste, et signe de vie
+# factory_issues "<n> [labels…]" … : issues area:factory ouvertes, au format JSON de gh.
+factory_issues() {
+  local spec
+  for spec in "$@"; do
+    set -- $spec  # découpage voulu : numéro puis labels
+    jq -n --argjson n "$1" '{number: $n, labels: ([$ARGS.positional[] | {name: .}] + [{name: "area:factory"}])}' \
+      --args "${@:2}"
+  done | jq -s . >"$FAKE/wait-factory.json"
+}
 reset; rm -f "$STATE_DIR/board-waiting"
-printf '28\n13\n' >"$FAKE/wait-factory"; echo 28 >"$FAKE/wait-board"
+factory_issues 28 13; echo 28 >"$FAKE/wait-board"
 notify_board_waiting; notify_board_waiting
 expect "attente du board : une seule notification pour la même liste" 1 "$(calls)"
 has_header 1 "Title: La factory attend le board : #13, #28" && ok "attente du board : liste triée sans doublon" \
   || ko "attente du board : titre « $(grep '^Title:' "$FAKE/headers.1") »"
-echo 13 >"$FAKE/wait-factory"; : >"$FAKE/wait-board"
+factory_issues 13 "23 status:blocked" "30 status:ready" "31 status:in-progress"; : >"$FAKE/wait-board"
 notify_board_waiting
 expect "attente du board : nouvelle notification quand la liste change" 2 "$(calls)"
-has_header 2 "Title: La factory attend le board : #13" && ok "attente du board : nouvelle liste" || ko "attente du board : nouvelle liste"
-: >"$FAKE/wait-factory"
+has_header 2 "Title: La factory attend le board : #13" \
+  && ok "attente du board : area:factory avec un status:* (blocked, ready, in-progress) exclue" \
+  || ko "attente du board : titre « $(grep '^Title:' "$FAKE/headers.2") »"
+factory_issues
 notify_board_waiting
 expect "attente du board : liste vide, aucune notification" 2 "$(calls)"
-reset; rm -f "$STATE_DIR/last-heartbeat"; printf '13\n28\n' >"$FAKE/wait-factory"; heartbeat
+reset; rm -f "$STATE_DIR/last-heartbeat"; factory_issues 13 28; heartbeat
 case "$(cat "$FAKE/body.1")" in *"Attend le board : #13, #28."*) ok "signe de vie : issues en attente du board" ;;
   *) ko "signe de vie sans l'attente du board : « $(cat "$FAKE/body.1") »" ;; esac
 

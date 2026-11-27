@@ -290,11 +290,12 @@ notify_weekly_report() {
   notify "Rapport hebdomadaire publié" low memo "$url" "Rapport du product-owner au board."
 }
 
-# Issues qui attendent le board : area:factory sans status:ready, ou label board (« #13, #28 »).
+# Issues qui attendent le board (« #13, #28 ») : label board, ou area:factory sans aucun label
+# status:* (une issue bloquée, prête ou en cours est suivie par la factory, pas par le board).
 board_waiting() {
   {
     gh issue list --repo "$REPO" --state open --label area:factory --limit 100 --json number,labels \
-      --jq '.[] | select(([.labels[].name] | index("status:ready")) | not) | .number'
+      --jq '.[] | select([.labels[].name] | any(startswith("status:")) | not) | .number'
     gh issue list --repo "$REPO" --state open --label board --limit 100 --json number --jq '.[].number'
   } 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' | sort -n -u | sed 's/^/#/' | paste -sd, - | sed 's/,/, /g'
 }
